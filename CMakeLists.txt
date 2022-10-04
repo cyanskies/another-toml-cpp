@@ -1,0 +1,27 @@
+cmake_minimum_required(VERSION 3.13)
+
+cmake_policy(SET CMP0048 NEW)
+project(another-toml-cpp VERSION 0.1 LANGUAGES CXX)
+
+add_library(${PROJECT_NAME})
+set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 20)
+
+if(BUILD_SHARED_LIBS)
+    set_target_properties(${PROJECT_NAME} PROPERTIES DEBUG_POSTFIX -d)
+    set_target_properties(${PROJECT_NAME} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+else() 
+    set_target_properties(${PROJECT_NAME} PROPERTIES DEBUG_POSTFIX -s-d)
+    set_target_properties(${PROJECT_NAME} PROPERTIES RELEASE_POSTFIX -s)
+endif()
+
+cmake_policy(SET CMP0076 NEW)
+
+target_sources(${PROJECT_NAME}
+	PUBLIC
+	./include/another_toml.hpp
+	./include/another_toml.inl
+	PRIVATE
+	./source/another_toml.cpp
+)
+
+target_include_directories(${PROJECT_NAME} PUBLIC ./include)
