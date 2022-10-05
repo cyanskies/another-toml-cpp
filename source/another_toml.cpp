@@ -110,9 +110,47 @@ namespace another_toml
 		return false;
 	}
 
-	static std::optional<std::string> parse_key_name(parser_state& strm, char start)
+	struct key_name
 	{
+		index_t parent;
+		std::optional<std::string> name;
+	};
 
+	static std::optional<std::string> get_quoted_name(parser_state& strm, char delim)
+	{
+		auto out = std::optional<std::string>{};
+		auto ch = strm.strm.good();
+		while (strm.strm.good() && ch != delim)
+		{
+			if (!out)
+				out = std::string{};
+			out->push_back(ch);
+		}
+
+		return out;
+	}
+
+	static key_name parse_key_name(parser_state& strm)
+	{
+		auto name = key_name{};
+		auto ch = strm.strm.good();
+
+		while (strm.strm.good())
+		{
+			if (ch == '\"')
+			{
+				name.name = get_quoted_name(strm, '\"');
+
+			}
+			
+
+			if (!name.name)
+			{
+
+			}
+
+			ch = strm.strm.get();
+		}
 	}
 
 	template<bool NoThrow>
@@ -192,12 +230,16 @@ namespace another_toml
 
 			if (ch == '[') // start table
 			{
+
 				if (strm.strm.peek() == '[')//array of tables
 				{
+					strm.strm.ignore();
 					;//parse_key_name(strm);
 				}
 				else
-					;//parse_key_name(strm);
+				{
+					auto name = parse_key_name(strm);
+				}
 
 					continue;
 			}
@@ -207,6 +249,7 @@ namespace another_toml
 				parse_comment(strm);
 			}
 
+			strm.strm.putback(ch);
 			//auto key_str = parse_key_name(strm);
 		}
 
