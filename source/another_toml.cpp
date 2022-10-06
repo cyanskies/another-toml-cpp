@@ -1,15 +1,27 @@
+// Deprecated but not marked for removal
+// This is the easiest way for us to convert unicode escape codes
+// We dont use the functionallity that was considered a vulnerability AFAIK
+#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
+
 #include "another_toml.hpp"
 
 #include <array>
 #include <cassert>
+#include <codecvt>
 #include <fstream>
 #include <iostream>
+//#include <locale>
 #include <ranges>
 #include <sstream>
-#include <variant>
+#include <string_view>
+
+using namespace std::string_literals;
+using namespace std::string_view_literals;
 
 namespace another_toml
 {
+	constexpr auto bad_index = std::numeric_limits<detail::index_t>::max();
+
 	namespace detail
 	{	
 		struct internal_node
@@ -17,12 +29,10 @@ namespace another_toml
 			// includes the table names
 			std::string name;
 			node_type type;
-			index_t next;
-			index_t child;
+			index_t next = bad_index;
+			index_t child = bad_index;
 			bool closed = false; // a closed table can still have child tables added, but not child keys
 		};
-
-		const auto bad_index = std::numeric_limits<index_t>::max();
 
 		struct toml_internal_data
 		{
@@ -33,8 +43,27 @@ namespace another_toml
 
 	using detail::index_t;
 
-	index_t find_table(std::string_view name) noexcept;
-	void insert_child(detail::toml_internal_data&, index_t parent, detail::internal_node n);
+	constexpr auto root_table = index_t{};
+
+	index_t find_table(std::string_view name, index_t parent, detail::toml_internal_data&) noexcept;
+
+	index_t insert_child(detail::toml_internal_data& d, index_t parent, detail::internal_node n)
+	{
+		auto new_index = size(d.tables);
+		d.tables.emplace_back(std::move(n));
+		auto& p = d.tables[parent];
+		if (p.child != bad_index)
+		{
+			detail::internal_node* child = &d.tables[p.child];
+			while (child->next != bad_index)
+				child = &d.tables[child->next];
+			child->next = new_index;
+		}
+		else
+			p.child = new_index;
+
+		return new_index;
+	}
 
 	enum class mode
 	{
@@ -49,66 +78,11 @@ namespace another_toml
 		table_end,
 		array_begin,
 		array_end,
-		key_value,
+		key,
 		value,
 		comment,
 		bad
 	};
-
-	struct token
-	{
-		index_t parent;
-		token_type type;
-		std::optional<std::string> value;
-	};
-
-	struct parser_state
-	{
-		std::istream& strm;
-		token prev;
-		mode mode = mode::root;
-		std::vector<node_type> stack = { node_type::table };
-		index_t parent = detail::bad_index;
-		index_t prev_sibling = detail::bad_index;
-		std::size_t line = {};
-		std::size_t col = {};
-	};
-
-	//Why is '\n' a forbidden char? That makes it impossible to end a comment
-	constexpr auto comment_forbidden_chars = std::array<char, 30>{
-		//U+0000 to U+0008
-		'\0', 1, 2, 3, 4, 5, 6, '\a', '\b',
-		//U+000A to U+001F
-		/*'\n',*/ '\v', '\f', /*'\r',*/ 14, 15, 16, 17, 18, 19, 20,
-		21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
-		//U+007F
-		127
-	};
-
-	constexpr auto comment_begin = '#';
-	
-	constexpr bool valid_utf8_char(char) noexcept; //??? how to implement
-
-	// limit to a-z, A-Z, 0-9, '-' and ' '
-	constexpr bool valid_key_name_char(char ch) noexcept
-	{
-		if (ch == '-')
-			return true;
-
-		if (ch >= '0' && ch <= '9')
-			return true;
-
-		if (ch >= 'A' && ch <= 'Z')
-			return true;
-
-		if (ch == '_')
-			return true;
-
-		if (ch >= 'a' && ch <= 'z')
-			return true;
-
-		return false;
-	}
 
 	struct key_name
 	{
@@ -116,51 +90,281 @@ namespace another_toml
 		std::optional<std::string> name;
 	};
 
-	static std::optional<std::string> get_quoted_name(parser_state& strm, char delim)
+	struct token
 	{
-		auto out = std::optional<std::string>{};
-		auto ch = strm.strm.good();
-		while (strm.strm.good() && ch != delim)
+		index_t parent;
+		token_type type;
+		key_name value;
+	};
+
+	struct parser_state
+	{
+		std::istream& strm;
+		token prev;
+		mode mode = mode::root;
+		std::vector<index_t> stack;
+		index_t parent = bad_index;
+		index_t prev_sibling = bad_index;
+		std::size_t line = {};
+		std::size_t col = {};
+	};
+
+	// TOML says that \n and \r are forbidden in comments
+	// in reality \n and \r\n marks the end of a comment
+	constexpr auto comment_forbidden_chars = std::array<char, 32>{
+		//U+0000 to U+0008
+		'\0', 1, 2, 3, 4, 5, 6, '\a', '\b',
+		//U+000A to U+001F
+		'\n', '\v', '\f', '\r', 14, 15, 16, 17, 18, 19, 20,
+		21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+		//U+007F
+		127
+	};
+
+	//test ch against the list of forbidden chars above
+	constexpr bool comment_forbidden_char(char ch) noexcept
+	{
+		return ch >= 0 && ch < 9 ||
+			ch > 9 && ch < 32 ||
+			ch == 127;
+	}
+
+	constexpr auto utf8_error_char = 0xD7FF17;
+	constexpr bool valid_utf8_char(int val) noexcept
+	{
+		return val >= 0 && val <= 0xD7FF16 || (val >= 0xE00016 && val <= 0x10FFFF);
+	}
+
+	// limit to a-z, A-Z, 0-9, '-' and ' '
+	constexpr bool valid_key_name_char(char ch) noexcept
+	{
+		return ch == '-'			||
+			ch >= '0' && ch <= '9'	||
+			ch >= 'A' && ch <= 'Z'	||
+			ch == '_'				||
+			ch >= 'a' && ch <= 'z';
+	}
+
+	//skip through whitespace
+	static bool whitespace(char ch, parser_state& strm) noexcept
+	{
+		if (ch != ' ' && ch != '\t')
+			return false;
+
+		while (ch == ' ' || ch == '\t')
 		{
-			if (!out)
-				out = std::string{};
-			out->push_back(ch);
+			const auto val = strm.strm.get();
+			if (val == std::istream::traits_type::eof())
+				return true;
+			++strm.col;
+			ch = static_cast<char>(val);
+		}
+
+		strm.strm.putback(ch);
+		return true;
+	}
+
+	static index_t insert_child_table(index_t parent, std::string_view name, detail::toml_internal_data& d)
+	{
+		auto table = detail::internal_node{ std::string{ name }, node_type::table };
+		return insert_child(d, parent, std::move(table));
+	}
+
+	constexpr auto escape_codes_raw = std::array{
+		"\\b"sv, "\\t"sv, "\\n"sv, "\\f"sv, "\\r"sv, "\\\""sv, "\\\\"sv // "\\uXXXX" "\\UXXXX"
+	};
+
+	constexpr auto escape_codes_char = std::array{
+		'\b', '\t', '\n', '\f', '\r', '\"', '\\' // "\\uXXXX" "\\UXXXX"
+	};
+
+	// replace string chars with proper escape codes
+	template<bool NoThrow>
+	static void replace_escape_chars(std::string& s) noexcept(NoThrow)
+	{
+		static_assert(size(escape_codes_raw) == size(escape_codes_char));
+		constexpr auto codes_size = size(escape_codes_raw);
+
+		auto pos = std::size_t{};
+		while (pos < size(s))
+		{
+			const auto code_beg = s.find("\\", pos);
+			if (code_beg == std::string::npos)
+				break; //we're done
+
+			const auto code_mid = code_beg + 1;
+			if (code_mid >= size(s))
+				break;// TODO: unmatched escape char
+
+			auto code_end = code_mid + 1;
+			auto found_code = false;
+			for (auto i = std::size_t{}; i < codes_size; ++i)
+			{
+				if (escape_codes_raw[i] == std::string_view{ &s[code_beg], &s[code_end] })
+				{
+					s.replace(code_beg, code_beg + 2,
+						1, escape_codes_char[i]);
+					found_code = true;
+					pos = code_beg + 1;
+					break;
+				}
+			}
+
+			if (!found_code)
+			{
+				if (auto unicode_char = s[code_mid]; 
+					unicode_char == 'u' || unicode_char == 'U')
+				{
+					auto str_val = std::string{};
+					if (s[code_mid] == 'u') // \uXXXX
+					{
+						str_val = s.substr(code_end, 4);
+						code_end = code_mid + 4;
+					}
+					else if (s[code_mid] == 'U') // \UXXXXXXXX
+					{
+						str_val = s.substr(code_end, 8);
+						code_end = code_mid + 8;
+					}
+
+					auto int_val = std::stoi(str_val, {}, 16);
+
+					auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{""};
+					auto u8 = cvt.to_bytes(int_val);
+					s.replace(code_beg, code_end - code_beg, u8);
+					pos += size(u8);
+					continue;
+				}
+
+				std::cerr << "Illigal escape code in quoted string: " << s[code_beg] << s[code_mid] << '\n';
+			}
+
+			++pos;
+		}
+
+		return;
+	}
+
+	static std::string get_quoted_name(parser_state& strm, char delim)
+	{
+		auto out = std::string{};
+		while (strm.strm.good())
+		{
+			auto ch = strm.strm.get();
+			if (ch == std::istream::traits_type::eof())
+				break;			
+
+			if (ch == delim)
+			{
+				strm.strm.putback(ch);
+				break;
+			}
+
+			out.push_back(ch);
+		}
+		
+		return out;
+	}
+
+	static std::optional<std::string> get_unquoted_name(parser_state& strm, char ch)
+	{
+		if (!valid_key_name_char(ch))
+			return {};
+		auto out = std::string{ ch };
+		while (strm.strm.good())
+		{
+			const auto val = strm.strm.get();
+			if (val == std::istream::traits_type::eof())
+				return {};
+
+			ch = static_cast<char>(val);
+			if (ch == ' ' ||
+				ch == '\t' ||
+				ch == '.' ||
+				ch == '=' ||
+				ch == ']')
+			{
+				strm.strm.putback(ch);
+				break;
+			}
+
+			if (!valid_key_name_char(ch))
+			{
+				std::cerr << "Illigal character found in table/key name: " << ch << '\n';
+				strm.strm.putback(ch);
+				return {};
+			}
+
+			++strm.col;
+			out.push_back(ch);
 		}
 
 		return out;
 	}
 
-	static key_name parse_key_name(parser_state& strm)
+	template<bool NoThrow>
+	static key_name parse_key_name(parser_state& strm, detail::toml_internal_data& d) noexcept(NoThrow)
 	{
 		auto name = key_name{};
-		auto ch = strm.strm.good();
-
+		auto parent = strm.stack.back();
 		while (strm.strm.good())
 		{
+			auto val = strm.strm.get();
+			if (val == std::istream::traits_type::eof())
+				break;
+
+			auto ch = static_cast<char>(val);
+			++strm.col;
+
+			if (whitespace(ch, strm))
+				continue;
+
+			if (ch == '=' || ch == ']')
+			{
+				strm.strm.putback(ch);
+				break;
+			}
+
 			if (ch == '\"')
 			{
+				if (name.name)
+					;//quote is in middle of key
 				name.name = get_quoted_name(strm, '\"');
-
+				replace_escape_chars<NoThrow>(*name.name);
 			}
-			
+			else if(ch == '\'')
+			{
+				if (name.name)
+					;//quote is in middle of key
+				name.name = get_quoted_name(strm, '\'');
+				//literals dont fix escape codes
+			}
+			else if (ch == '.')
+			{
+				if (!name.name)
+					;//error, cannot start a key with '.' missing key name
+				else
+				{
+					//pop the current name and stash it
+				}
+			}
 
 			if (!name.name)
 			{
-
+				auto str = get_unquoted_name(strm, ch);
+				if (str)
+					name.name = str;
+				else
+					return {};
 			}
-
-			ch = strm.strm.get();
 		}
+
+		return name;
 	}
 
 	template<bool NoThrow>
 	static node parse_array() noexcept(NoThrow)
 	{
-	}
-
-	static bool whitespace(char ch) noexcept
-	{
-		return ch == ' ' || ch == '\t';
 	}
 
 	//new line(we check both, since file may have been opened in binary mode)
@@ -179,7 +383,11 @@ namespace another_toml
 	{
 		while (strm.strm.good())
 		{
-			auto ch = strm.strm.get();
+			const auto val = strm.strm.get();
+			if (val == std::istream::traits_type::eof())
+				return;
+
+			const auto ch = static_cast<char>(val);
 			if (newline(strm, ch))
 			{
 				strm.col = {};
@@ -187,9 +395,7 @@ namespace another_toml
 				return;
 			}
 
-			if (std::ranges::any_of(comment_forbidden_chars, [ch](auto& badch) {
-				return ch == badch;
-				}))
+			if (comment_forbidden_char(ch))
 			{
 				std::cerr << "Forbidden character in comment: " << ch << '(' << static_cast<int>(ch) << ")\n";
 			}
@@ -199,7 +405,7 @@ namespace another_toml
 	}
 
 	template<bool NoThrow>
-	static token parse_token(parser_state& strm, detail::toml_internal_data&) noexcept(NoThrow)
+	static token parse_token(parser_state& strm, detail::toml_internal_data& toml_data) noexcept(NoThrow)
 	{
 		// parser candidates
 		// table
@@ -208,18 +414,19 @@ namespace another_toml
 		// comment
 		while (strm.strm.good())
 		{
-			auto ch = strm.strm.get();
+			const auto val = strm.strm.get();
+			if (val == std::istream::traits_type::eof())
+				return {};
+			const auto ch = static_cast<char>(val);
+
 			++strm.col;
 
 			auto equal_to_ch = [ch](auto&& other) noexcept {
 				return ch == other;
 			};
 
-			// whitespace
-			if (whitespace(ch))
-			{
+			if (whitespace(ch, strm))
 				continue;
-			}
 
 			if(newline(strm, ch))
 			{
@@ -230,18 +437,46 @@ namespace another_toml
 
 			if (ch == '[') // start table
 			{
-
 				if (strm.strm.peek() == '[')//array of tables
 				{
 					strm.strm.ignore();
 					;//parse_key_name(strm);
+					// check for extra "]"
 				}
 				else
 				{
-					auto name = parse_key_name(strm);
-				}
+					if (auto indx = strm.stack.back();
+						indx != root_table)
+					{
+						strm.strm.putback(ch);
 
-					continue;
+						switch(toml_data.tables[indx].type)
+						{
+						case node_type::table:
+							return token{ bad_index, token_type::table_end };
+						case node_type::array:
+							return token{ bad_index, token_type::array_end };
+						}
+					}
+
+					auto name = parse_key_name<NoThrow>(strm, toml_data);
+
+					auto next_ch = strm.strm.get();
+					++strm.col;
+					if (whitespace(next_ch, strm))
+					{
+						next_ch = strm.strm.get();
+						++strm.col;
+					}
+
+					if (next_ch != ']')
+					{
+						std::cerr << "Unexpected character, was expecting ']'; found: " << next_ch << '\n';
+						return {};
+					}
+
+					return token{ name.parent, token_type::table_begin, name };
+				}
 			}
 
 			if (ch == '#')
@@ -249,7 +484,7 @@ namespace another_toml
 				parse_comment(strm);
 			}
 
-			strm.strm.putback(ch);
+			//strm.strm.putback(ch);
 			//auto key_str = parse_key_name(strm);
 		}
 
@@ -261,18 +496,29 @@ namespace another_toml
 	{
 		auto toml_data = std::make_shared<detail::toml_internal_data>();
 		auto& t = toml_data->tables;
+		auto p_state = parser_state{ strm };
 
 		// implicit global table
 		// always stored at index 0
 		t.emplace_back(std::string{}, node_type::table);
-		auto p_state = parser_state{ strm };
+		p_state.stack.emplace_back(0);
 
-		auto current_index = index_t{};
+		auto open_tables = std::vector<index_t>{};
 
-		while(!strm.eof())
+		while(strm.good())
 		{
-			auto token = parse_token<NoThrow>(p_state, *toml_data);
+			token tok = parse_token<NoThrow>(p_state, *toml_data);
+			const auto& name = tok.value.name;
 
+			switch (tok.type)
+			{
+			case token_type::table_begin:
+				// we must be in the root, array or value state
+				const auto table = insert_child_table(tok.parent, *name , *toml_data);
+				open_tables.emplace_back(table);
+				p_state.stack.emplace_back(table);
+				continue;
+			}
 		}
 
 		return { std::move(toml_data), {} };

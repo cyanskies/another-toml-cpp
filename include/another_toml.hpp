@@ -25,7 +25,8 @@ namespace another_toml
 		array, 
 		key,
 		value,
-		comment // note, we don't provide access to comments or preserve them
+		comment, // note, we don't provide access to comments or preserve them
+		bad_type
 	};
 
 	class node;
