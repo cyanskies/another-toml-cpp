@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <istream>
 #include <memory>
+#include <stdexcept>
 #include <string_view>
 #include <vector>
 
@@ -11,6 +12,27 @@
 
 namespace another_toml
 {
+	//thown by any of the parse functions
+	class parser_error :public std::runtime_error
+	{
+	public:
+		using std::runtime_error::runtime_error;
+	};
+
+	//thrown if eof is encountered in an unexpected location(inside a quote or table name, etc.)
+	class unexpected_eof : public parser_error
+	{
+	public:
+		using  parser_error::parser_error;
+	};
+
+	//thrown when encountering an unexpected character
+	class unexpected_character :public parser_error
+	{
+	public:
+		using  parser_error::parser_error;
+	};
+
 	namespace detail
 	{
 		using index_t = std::size_t;
