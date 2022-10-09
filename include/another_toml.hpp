@@ -33,6 +33,13 @@ namespace another_toml
 		using  parser_error::parser_error;
 	};
 
+	//thrown if the toml file contains duplicate table or key declarations
+	class duplicate_element :public parser_error
+	{
+	public:
+		using  parser_error::parser_error;
+	};
+
 	namespace detail
 	{
 		using index_t = std::size_t;

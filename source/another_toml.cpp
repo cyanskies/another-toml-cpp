@@ -21,11 +21,17 @@ using namespace std::string_view_literals;
 
 namespace another_toml
 {
+	// byte order mark for utf-8, optionally included at the beginning of utf8 text documents
 	constexpr auto utf8_bom = std::array{
 		0xEF, 0xBB, 0xBF
 	};
 
 	constexpr auto bad_index = std::numeric_limits<detail::index_t>::max();
+
+	enum class value_type {
+		string,
+		unknown // couldn't detect, can still be read as string
+	};
 
 	namespace detail
 	{	
@@ -34,6 +40,7 @@ namespace another_toml
 			// includes the table names
 			std::string name;
 			node_type type = node_type::bad_type;
+			value_type v_type = value_type::unknown;
 			index_t next = bad_index;
 			index_t child = bad_index;
 			// a closed table can still have child tables added, but not child keys
@@ -47,7 +54,7 @@ namespace another_toml
 		};
 	}
 
-	using detail::index_t;
+	using namespace detail;
 
 	constexpr auto root_table = index_t{};
 
@@ -68,21 +75,36 @@ namespace another_toml
 		return bad_index;
 	}
 
+	template<bool NoThrow>
 	index_t insert_child(detail::toml_internal_data& d, index_t parent, detail::internal_node n)
 	{
 		assert(parent != bad_index);
-		auto new_index = size(d.tables);
-		d.tables.emplace_back(std::move(n));
+		const auto new_index = size(d.tables);
 		auto& p = d.tables[parent];
 		if (p.child != bad_index)
 		{
 			detail::internal_node* child = &d.tables[p.child];
 			while (child->next != bad_index)
+			{
+				if (child->type == n.type &&
+					child->name == n.name)
+				{
+					if constexpr (NoThrow)
+						return bad_index;
+					else
+						throw duplicate_element{ "Tried to insert duplicate element: "s + n.name + ", into: " + p.name };
+				}
+
 				child = &d.tables[child->next];
+			}
+
 			child->next = new_index;
 		}
 		else
 			p.child = new_index;
+
+		d.tables.emplace_back(std::move(n));
+
 
 		return new_index;
 	}
@@ -111,6 +133,9 @@ namespace another_toml
 		root,
 	};
 
+	// NOTE: tokens are only used at the highest level
+	//		of the textual heirarchy,
+	//		so tables, arrays of tables, keys
 	enum class token_type
 	{
 		table_begin,
@@ -140,7 +165,7 @@ namespace another_toml
 	struct parser_state
 	{
 		template<bool NoThrow>
-		std::pair<unsigned char, bool> get_char() noexcept(NoThrow)
+		std::pair<char, bool> get_char() noexcept(NoThrow)
 		{
 			auto val = strm.get();
 			if (val == std::istream::traits_type::eof())
@@ -152,7 +177,7 @@ namespace another_toml
 			}
 
 			++col;
-			return { static_cast<unsigned char>(val), {} };
+			return { static_cast<char>(val), {} };
 		}
 
 		std::istream& strm;
@@ -222,10 +247,18 @@ namespace another_toml
 		return true;
 	}
 
+	template<bool NoThrow>
 	static index_t insert_child_table(index_t parent, std::string_view name, detail::toml_internal_data& d)
 	{
 		auto table = detail::internal_node{ std::string{ name }, node_type::table };
-		return insert_child(d, parent, std::move(table));
+		return insert_child<NoThrow>(d, parent, std::move(table));
+	}
+
+	template<bool NoThrow>
+	static index_t insert_child_key(index_t parent, std::string_view name, detail::toml_internal_data& d)
+	{
+		auto key = detail::internal_node{ std::string{ name }, node_type::key };
+		return insert_child<NoThrow>(d, parent, std::move(key));
 	}
 
 	constexpr auto escape_codes_raw = std::array{
@@ -387,7 +420,7 @@ namespace another_toml
 	}
 
 	template<bool NoThrow>
-	static key_name parse_key_name(parser_state& strm, detail::toml_internal_data& d) noexcept(NoThrow)
+	static key_name parse_key_name(parser_state& strm, detail::toml_internal_data& d)
 	{
 		auto name = std::optional<std::string>{};
 		auto parent = strm.stack.back();
@@ -422,10 +455,16 @@ namespace another_toml
 				if (!replace_escape_chars<NoThrow>(*name))
 					return {};
 
-				std::tie(ch, eof) = strm.get_char();
+				std::tie(ch, eof) = strm.get_char<NoThrow>();
 				if (eof || ch != '\"')
 				{
-					;//error
+					if constexpr (NoThrow)
+					{
+						std::cerr << "Unexpected end of quoted string: "s << name.value_or("\"\""s) << '\n';
+						return {};
+					}
+					else
+						throw unexpected_character{ "Unexpected end of quoted string"s };
 				}
 				continue;
 			}
@@ -460,7 +499,7 @@ namespace another_toml
 				{
 					auto child = find_child(d, parent, *name);
 					if (child == bad_index)
-						child = insert_child_table(parent, *name, d);
+						child = insert_child_table<NoThrow>(parent, *name, d);
 					parent = child;
 					name = {};
 					continue;
@@ -497,32 +536,84 @@ namespace another_toml
 		return ch == '\n';
 	}
 
-	static void parse_comment(parser_state& strm) noexcept
+	// for parsing keywords, dates or numerical values
+	template<bool NoThrow>
+	static bool parse_unquoted_value(parser_state& strm, detail::toml_internal_data& toml_data)
+	{
+		auto out = std::string{};
+		auto ch = char{};
+		auto eof = bool{};
+		while (strm.strm.good())
+		{
+			std::tie(ch, eof) = strm.get_char<NoThrow>();
+			if (eof)
+				break;
+
+			if (newline(strm, ch))
+				break;
+
+			out.push_back(ch);
+		}
+
+		while (!empty(out) && (out.back() == '\t' || out.back() == ' '))
+			out.pop_back();
+
+		return false;
+	}
+
+	template<bool NoThrow>
+	static bool parse_value(parser_state& strm, detail::toml_internal_data& toml_data)
+	{
+		while (strm.strm.good())
+		{
+			const auto [ch, eof] = strm.get_char<NoThrow>();
+			if (eof)
+				return false;
+
+			// '[' start array
+
+			// '{' start inline table
+
+			// '"' string
+			// ''' literal string
+
+			// ''' && """ raw strings and raw literal strings
+
+			// non-# char start keyword, or digit based value
+		}
+
+		return false;
+	}
+
+	static bool parse_comment(parser_state& strm) noexcept
 	{
 		while (strm.strm.good())
 		{
 			auto [ch, eof] = strm.get_char<true>();
 			if (eof)
-				return;
+				break;
 
 			if (newline(strm, ch))
 			{
 				strm.col = {};
 				++strm.line;
-				return;
+				break;
 			}
 
 			if (comment_forbidden_char(ch))
 			{
 				std::cerr << "Forbidden character in comment: " << ch << '(' << static_cast<int>(ch) << ")\n";
+				return false;
 			}
 
 			++strm.col;
 		}
+
+		return true;
 	}
 
 	template<bool NoThrow>
-	static token parse_table_header(parser_state& strm, detail::toml_internal_data& toml_data) noexcept(NoThrow)
+	static token parse_table_header(parser_state& strm, detail::toml_internal_data& toml_data)
 	{
 		const auto name = parse_key_name<NoThrow>(strm, toml_data);
 		auto [ch, eof] = strm.get_char<NoThrow>();
@@ -563,13 +654,25 @@ namespace another_toml
 	}
 
 	template<bool NoThrow>
-	static token parse_token(parser_state& strm, detail::toml_internal_data& toml_data) noexcept(NoThrow)
+	static token parse_token(parser_state& strm, detail::toml_internal_data& toml_data)
 	{
 		// find the next token
 		// root tokens, like a table header or key name
 		// or rhs tokens(anything that can follow a '=')
 
-		const auto parent_type = toml_data.tables[strm.stack.back()].type;
+		const auto parent = strm.stack.back();
+		const auto parent_type = toml_data.tables[parent].type;
+		if (parent_type == node_type::key)
+		{
+			if (parse_value<NoThrow>(strm, toml_data))
+				return token{ parent, token_type::value, ""s };
+			else
+			{
+				std::cerr << "Error while parsing value"s;
+				return {};
+			}
+		}
+
 		while (strm.strm.good())
 		{
 			auto [ch, eof] = strm.get_char<NoThrow>();
@@ -603,14 +706,34 @@ namespace another_toml
 
 			if (ch == '#')
 			{
-				parse_comment(strm);
-				continue;
+				if (parse_comment(strm))
+					continue;
+				else
+					return {};
 			}
 
 			strm.strm.putback(ch);
 			auto key_str = parse_key_name<NoThrow>(strm, toml_data);
-			if (!key_str.name)
+			std::tie(ch, eof) = strm.get_char<NoThrow>();
+
+			if (eof || !key_str.name)
 				return {};
+
+			whitespace(ch, strm);
+
+			//look for '='
+			std::tie(ch, eof) = strm.get_char<NoThrow>();
+			if (eof || ch != '=')
+			{
+				if constexpr (NoThrow)
+				{
+					std::cerr << "key names must be followed by '='"s;
+					return {};
+				}
+				else 
+					throw unexpected_character{ "key names must be followed by '='"s };
+			}
+
 			return { token{ key_str.parent, token_type::key, std::move(key_str.name) } };
 		}
 
@@ -618,7 +741,7 @@ namespace another_toml
 	}
 
 	template<bool NoThrow>
-	static node parse_toml(std::istream& strm) noexcept(NoThrow)
+	static node parse_toml(std::istream& strm)
 	{
 		auto toml_data = std::make_shared<detail::toml_internal_data>();
 		auto& t = toml_data->tables;
@@ -655,6 +778,7 @@ namespace another_toml
 			switch (tok.type)
 			{
 			case token_type::table_begin:
+			{
 				//close any open tables
 				for (auto t : p_state.open_tables)
 				{
@@ -664,8 +788,14 @@ namespace another_toml
 
 				p_state.open_tables.clear();
 				// we must be in the root state
-				const auto table = insert_child_table(tok.parent, *name , *toml_data);
+				const auto table = insert_child_table<NoThrow>(tok.parent, *name, *toml_data);
 				p_state.stack.emplace_back(table);
+				
+			} continue;
+			case token_type::key:
+				// TODO: don't do this here, parse the value after getting the key and do nothing here.
+				auto key_index = insert_child_key<NoThrow>(tok.parent, *name, *toml_data);
+				p_state.stack.emplace_back(key_index);
 				continue;
 			}
 		}
@@ -674,7 +804,7 @@ namespace another_toml
 	}
 
 	template<bool NoThrow>
-	node parse(std::istream& strm) noexcept(NoThrow)
+	node parse(std::istream& strm)
 	{
 		if (!strm.good())
 			return {};
@@ -683,14 +813,14 @@ namespace another_toml
 	}
 
 	template<bool NoThrow>
-	node parse(std::string_view toml) noexcept(NoThrow)
+	node parse(std::string_view toml)
 	{
 		auto strstream = std::stringstream{ std::string{ toml }, std::ios_base::in };
 		return parse<NoThrow>(strstream);
 	}
 
 	template<bool NoThrow>
-	node parse(const std::filesystem::path& path) noexcept(NoThrow)
+	node parse(const std::filesystem::path& path)
 	{
 		if (!std::filesystem::exists(path))
 			return {};
