@@ -12,9 +12,11 @@
 #include <iostream>
 //#include <locale>
 #include <ranges>
+#include <regex>
 #include <sstream>
 #include <stack>
 #include <string_view>
+#include <variant>
 
 using namespace std::string_literals;
 using namespace std::string_view_literals;
@@ -30,17 +32,32 @@ namespace another_toml
 
 	enum class value_type {
 		string,
-		unknown // couldn't detect, can still be read as string
+		integer,
+		floating_point,
+		boolean,
+		date_time,
+		local_date_time,
+		local_date,
+		local_time,
+		unknown, // couldn't detect, can still be read as string
+		// The following values are internal only
+		bad, // detected as invalid
+		out_of_range
 	};
 
 	namespace detail
 	{	
+		using variant_t = std::variant<std::monostate, std::int64_t, double, bool,
+			//dates,
+			date_time, local_date_time, date, time>;
+
 		struct internal_node
 		{
 			// includes the table names
 			std::string name;
 			node_type type = node_type::bad_type;
 			value_type v_type = value_type::unknown;
+			variant_t value;
 			index_t next = bad_index;
 			index_t child = bad_index;
 			// a closed table can still have child tables added, but not child keys
@@ -75,8 +92,14 @@ namespace another_toml
 		return bad_index;
 	}
 
+	void insert_bad(detail::toml_internal_data& d)
+	{
+		d.tables.emplace_back(internal_node{ {}, node_type::bad_type });
+		return;
+	}
+
 	template<bool NoThrow>
-	index_t insert_child(detail::toml_internal_data& d, index_t parent, detail::internal_node n)
+	index_t insert_child(detail::toml_internal_data& d, const index_t parent, detail::internal_node n)
 	{
 		assert(parent != bad_index);
 		const auto new_index = size(d.tables);
@@ -138,14 +161,16 @@ namespace another_toml
 	//		so tables, arrays of tables, keys
 	enum class token_type
 	{
-		table_begin,
-		table_end,
-		array_table_begin,
-		array_begin,
+		table,
+		array_table,
+		inline_table,
+		inline_table_end,
+		array,
 		array_end,
 		key,
-		value,
-		comment,
+		value, // element end
+		comma,
+		newline,
 		bad
 	};
 
@@ -180,6 +205,20 @@ namespace another_toml
 			return { static_cast<char>(val), {} };
 		}
 
+		void nextline() noexcept
+		{
+			col = {};
+			++line;
+			return;
+		}
+
+		void putback(char ch) noexcept
+		{
+			--col;
+			strm.putback(ch);
+			return;
+		}
+
 		std::istream& strm;
 		token prev;
 		mode mode = mode::root;
@@ -187,11 +226,24 @@ namespace another_toml
 		std::vector<index_t> stack;
 		// tables that need to be closed when encountering the next table header
 		std::vector<index_t> open_tables;
+		std::vector<token_type> token_stream;
 		index_t parent = bad_index;
 		index_t prev_sibling = bad_index;
 		std::size_t line = {};
 		std::size_t col = {};
 	};
+
+	//new line(we check both, since file may have been opened in binary mode)
+	static bool newline(parser_state& strm, char ch) noexcept
+	{
+		if (ch == '\r' && strm.strm.peek() == '\n')
+		{
+			strm.strm.ignore();
+			return true;
+		}
+
+		return ch == '\n';
+	}
 
 	// TOML says that \n and \r are forbidden in comments
 	// in reality \n and \r\n marks the end of a comment
@@ -219,7 +271,7 @@ namespace another_toml
 		return val >= 0 && val <= 0xD7FF16 || (val >= 0xE00016 && val <= 0x10FFFF);
 	}
 
-	// limit to a-z, A-Z, 0-9, '-' and ' '
+	// limit to a-z, A-Z, 0-9, '-' and '_'
 	constexpr bool valid_key_name_char(char ch) noexcept
 	{
 		return ch == '-'			||
@@ -230,6 +282,7 @@ namespace another_toml
 	}
 
 	//skip through whitespace
+	// returns true if you need to get a new char
 	static bool whitespace(char ch, parser_state& strm) noexcept
 	{
 		if (ch != ' ' && ch != '\t')
@@ -243,30 +296,30 @@ namespace another_toml
 				return true;
 		}
 
-		strm.strm.putback(ch);
+		strm.putback(ch);
 		return true;
 	}
 
 	template<bool NoThrow>
-	static index_t insert_child_table(index_t parent, std::string_view name, detail::toml_internal_data& d)
+	static index_t insert_child_table(index_t parent, std::string name, detail::toml_internal_data& d)
 	{
-		auto table = detail::internal_node{ std::string{ name }, node_type::table };
+		auto table = detail::internal_node{ std::move(name) , node_type::table };
 		return insert_child<NoThrow>(d, parent, std::move(table));
 	}
 
 	template<bool NoThrow>
-	static index_t insert_child_key(index_t parent, std::string_view name, detail::toml_internal_data& d)
+	static index_t insert_child_key(index_t parent, std::string name, detail::toml_internal_data& d)
 	{
-		auto key = detail::internal_node{ std::string{ name }, node_type::key };
+		auto key = detail::internal_node{ std::move(name), node_type::key};
 		return insert_child<NoThrow>(d, parent, std::move(key));
 	}
 
 	constexpr auto escape_codes_raw = std::array{
-		"\\b"sv, "\\t"sv, "\\n"sv, "\\f"sv, "\\r"sv, "\\\""sv, "\\\\"sv // "\\uXXXX" "\\UXXXX"
+		"\\b"sv, "\\t"sv, "\\n"sv, "\\f"sv, "\\r"sv, "\\\""sv, "\\\\"sv // "\\uXXXX" "\\UXXXXXXXX"
 	};
 
 	constexpr auto escape_codes_char = std::array{
-		'\b', '\t', '\n', '\f', '\r', '\"', '\\' // "\\uXXXX" "\\UXXXX"
+		'\b', '\t', '\n', '\f', '\r', '\"', '\\' // "\\uXXXX" "\\UXXXXXXXX"
 	};
 
 	const auto unicode_bad_conversion = "conversion_error"s;
@@ -305,6 +358,9 @@ namespace another_toml
 
 			if (!found_code)
 			{
+				// Unicode chars are 1-4 bytes, the escape code is at least 6 chars
+				// so the resulting string will always be shorter, string won't have
+				// to alloc.
 				if (const auto unicode_char = s[code_mid]; 
 					unicode_char == 'u' || unicode_char == 'U')
 				{
@@ -367,16 +423,45 @@ namespace another_toml
 		return true;
 	}
 
-	static std::string get_quoted_name(parser_state& strm, char delim)
+	template<bool DoubleQuoted>
+	static std::optional<std::string> get_quoted_str(parser_state& strm)
 	{
+		constexpr auto delim = DoubleQuoted ? '\"' : '\'';
 		auto out = std::string{};
 		while (strm.strm.good())
 		{
 			const auto [ch, eof] = strm.get_char<true>();
 			if (eof)
-				break;			
+				return {}; // illigal character in string
+			if (newline(strm, ch))
+			{
+				strm.nextline();
+				return {}; // illigal character in string
+			}
+
 			if (ch == delim)
-				break;
+			{
+				if constexpr (DoubleQuoted)
+				{
+					//don't break on excaped quote: '\"'
+					if (out.back() != '\\')
+					{
+						strm.putback(ch);
+						break;
+					}
+					// but do break if escaped slash followed by quote: "\\""
+					else if (out[size(out) - 2] == '\\')
+					{
+						strm.putback(ch);
+						break;
+					}
+				}
+				else 
+				{
+					strm.putback(ch);
+					break;
+				}
+			}
 
 			out.push_back(ch);
 		}
@@ -401,18 +486,17 @@ namespace another_toml
 				ch == '=' ||
 				ch == ']')
 			{
-				strm.strm.putback(ch);
+				strm.putback(ch);
 				break;
 			}
 
 			if (!valid_key_name_char(ch))
 			{
 				std::cerr << "Illigal character found in table/key name: " << ch << '\n';
-				strm.strm.putback(ch);
+				strm.putback(ch);
 				return {};
 			}
 
-			++strm.col;
 			out.push_back(ch);
 		}
 
@@ -427,15 +511,18 @@ namespace another_toml
 		while (strm.strm.good())
 		{
 			auto [ch, eof] = strm.get_char<NoThrow>();
-			if (eof)
-				return {};
+			if constexpr (NoThrow)
+			{
+				if (eof)
+					return {};
+			}
 
 			if (whitespace(ch, strm))
 				continue;
 
 			if (ch == '=' || ch == ']')
 			{
-				strm.strm.putback(ch);
+				strm.putback(ch);
 				break;
 			}
 
@@ -451,7 +538,7 @@ namespace another_toml
 					else
 						throw unexpected_character{ "Illigal character in name: \"" };
 				}
-				name = get_quoted_name(strm, '\"');
+				name = get_quoted_str<true>(strm);
 				if (!replace_escape_chars<NoThrow>(*name))
 					return {};
 
@@ -480,7 +567,8 @@ namespace another_toml
 					else
 						throw unexpected_character{ "Illigal character in name: \'" };
 				}
-				name = get_quoted_name(strm, '\'');
+				name = get_quoted_str<false>(strm);
+				// TODO: eat the trailing '\''
 				//literals dont fix escape codes
 			}
 			else if (ch == '.')
@@ -524,16 +612,277 @@ namespace another_toml
 	{
 	}
 
-	//new line(we check both, since file may have been opened in binary mode)
-	static bool newline(parser_state& strm, char ch) noexcept
+	static int chtoi(const char* first, const char* last) noexcept
 	{
-		if (ch == '\r' && strm.strm.peek() == '\n')
+		auto out = int{};
+		auto ret = std::from_chars(first, last, out);
+		if (ret.ptr == last)
+			return out;
+		else if (ret.ec == std::errc::invalid_argument)
+			return -1;
+		else if (ret.ec == std::errc::result_out_of_range)
+			return -2;
+	}
+
+	enum class match_index 
+	{
+		date = 1,
+		year,
+		month,
+		day,
+		time,
+		hours,
+		minues,
+		seconds,
+		seconds_frac,
+		offset,
+		off_sign,
+		off_hours,
+		off_minues
+	};
+
+	using reg_matches = std::match_results<std::string_view::iterator>;
+
+	static std::optional<date> fill_date(const reg_matches& matches) noexcept
+	{
+		auto out = date{};
+		assert(matches[static_cast<std::size_t>(match_index::date)].matched);
+		const auto& years = matches[static_cast<std::size_t>(match_index::year)];
+		assert(years.matched);
+		auto ret = std::from_chars(&*years.first, &*years.second, out.year);
+		if (ret.ptr == &*years.second)
 		{
-			strm.strm.ignore();
-			return true;
+			const auto& months = matches[static_cast<std::size_t>(match_index::month)];
+			assert(months.matched);
+			ret = std::from_chars(&*months.first, &*months.second, out.month);
+			if (ret.ptr == &*months.second)
+			{
+				const auto& days = matches[static_cast<std::size_t>(match_index::day)];
+				assert(days.matched);
+				ret = std::from_chars(&*days.first, &*days.first + days.length(), out.day);
+				if (ret.ptr == &*days.first + days.length())
+					return out;
+			}
 		}
 
-		return ch == '\n';
+		return {};
+	}
+
+	static std::optional<time> fill_time(const reg_matches& matches) noexcept
+	{
+		auto out = time{};
+		assert(matches[static_cast<std::size_t>(match_index::time)].matched);
+		const auto& hours = matches[static_cast<std::size_t>(match_index::hours)];
+		assert(hours.matched);
+		auto ret = std::from_chars(&*hours.first, &*hours.second, out.hours);
+		if (ret.ptr == &*hours.second)
+		{
+			const auto& minutes = matches[static_cast<std::size_t>(match_index::minues)];
+			assert(minutes.matched);
+			ret = std::from_chars(&*minutes.first, &*minutes.second, out.minutes);
+			if (ret.ptr == &*minutes.second)
+			{
+				const auto& seconds = matches[static_cast<std::size_t>(match_index::seconds)];
+				assert(seconds.matched);
+				ret = std::from_chars(&*seconds.first, &*seconds.first + seconds.length(), out.seconds);
+				if (ret.ptr == &*seconds.first + seconds.length())
+				{
+					const auto& seconds_frac = matches[static_cast<std::size_t>(match_index::seconds_frac)];
+					if (seconds_frac.matched)
+					{
+						ret = std::from_chars(&*seconds_frac.first, &*seconds_frac.first + seconds_frac.length(), out.seconds_frac);
+						if (ret.ptr == &*seconds_frac.first + seconds_frac.length())
+							return out;
+					}
+					else
+						return out;
+				}
+			}
+		}
+
+		return {};
+	}
+
+	static std::optional<local_date_time> fill_date_time(const reg_matches& matches) noexcept
+	{
+		const auto date = fill_date(matches);
+		const auto time = fill_time(matches);
+		if (date && time)
+			return local_date_time{ *date, *time };
+	
+		return {};
+	}
+
+	static std::pair<value_type, variant_t> get_value_type(std::string_view str) noexcept
+	{
+		if (empty(str))
+			return { value_type::bad, {} };
+
+		//keywords
+		//	true, false
+		if (str == "true"sv)
+			return { value_type::boolean, true };
+		if (str == "false"sv)
+			return { value_type::boolean, false };
+		//	inf, +inf, -inf
+		if (str == "inf"sv || str == "+inf"sv)
+			return { value_type::floating_point, std::numeric_limits<double>::infinity() };
+		if (str == "-inf"sv)
+			return { value_type::floating_point, -std::numeric_limits<double>::infinity()};
+		//	nan, +nan, -nan
+		if(str == "nan"sv || str == "+nan"sv || str == "-nan"sv)
+			return { value_type::floating_point, std::numeric_limits<double>::quiet_NaN() };
+		
+		const auto beg = begin(str);
+		const auto end = std::end(str);
+
+		// also removes leading '+'
+		const auto remove_underscores = [](std::string_view sv) noexcept {
+			auto str = std::string{ sv };
+			for (auto iter = begin(str); iter != std::end(str); ++iter)
+			{
+				if (*iter == '_')
+					iter = str.erase(iter);
+			}
+			if (!empty(str) && str.front() == '+')
+				str.erase(begin(str));
+			return str;
+		};
+
+		// matches all valid integers with optional underscores after the first digit
+		//  -normal digits(with no leading 0)
+		//	-hex
+		//	-binary
+		//	-oct
+		// doesn't check for min/max value
+		constexpr auto int_reg =
+			R"(^[\+\-]?[1-9]+(_([\d])+)*$|^0x[\dA-Fa-f]+(_[\dA-Fa-f]*)*|0b[01]+(_[01]*)*|0o[0-7]+(_([0-7])+)*|^[\+\-]?0$)";
+
+		if (std::regex_match(beg, end, std::regex{ int_reg }))
+		{
+			auto string = std::invoke(remove_underscores, str);
+			
+			auto base = 10;
+			if (size(string) > 1)
+			{
+				const auto base_chars = std::string_view(begin(string), begin(string) + 2);
+				if (base_chars == "0x"sv)
+					base = 16;
+				else if (base_chars == "0b"sv)
+					base = 2;
+				else if (base_chars == "0o"sv)
+					base = 8;
+
+				if (base != 10)
+					string.erase(0, 2);
+			}
+			
+			//convert to int
+			auto int_val = std::int64_t{};
+			const auto string_end = &string[0] + size(string);
+			auto ret = std::from_chars(&string[0], string_end, int_val, base);
+
+			if (ret.ptr == string_end)
+				return { value_type::integer, {int_val} };
+			else if(ret.ec == std::errc::invalid_argument)
+				return { value_type::bad, {} };
+			else if (ret.ec == std::errc::result_out_of_range)
+				return { value_type::out_of_range, {} };
+		}
+		
+		//floating point(double)
+		constexpr auto float_reg = R"(^[\+\-]?([1-9]+(_([\d])+)*|0)(\.[\d]+(_[\d])*)?([eE][\+\-]?[\d]+(_[\d]+)?)?$)";
+		if (std::regex_match(beg, end, std::regex{ float_reg }))
+		{
+			const auto string = std::invoke(remove_underscores, str);
+			auto floating_val = double{};
+			const auto string_end = &string[0] + size(string);
+			const auto ret = std::from_chars(&string[0], string_end, floating_val);
+			if (ret.ptr == string_end)
+				return { value_type::floating_point, {floating_val} };
+			else if (ret.ec == std::errc::invalid_argument)
+				return { value_type::bad, {} };
+			else if (ret.ec == std::errc::result_out_of_range)
+				return { value_type::out_of_range, {} };
+		}
+
+		constexpr auto date_time_reg =
+			R"(^((\d{4})-(\d{2})-(\d{2}))?[T t]?((\d{2}):(\d{2}):(\d{2})(\.\d+)?)?(([zZ]|[\+\-])(\d{2}):(\d{2}))?$)";
+		if (auto matches = std::match_results<std::string_view::iterator>{};
+			std::regex_match(beg, end, matches, std::regex{ date_time_reg }))
+		{
+			//date
+			const auto& date = matches[static_cast<std::size_t>(match_index::date)];
+			const auto& time = matches[static_cast<std::size_t>(match_index::time)];
+			const auto& offset = matches[static_cast<std::size_t>(match_index::offset)];
+		
+			const auto offset_date_time = date.matched &&
+				time.matched &&
+				offset.matched;
+			const auto local_date_time = date.matched &&
+				time.matched;
+			const auto local_date = date.matched;
+			const auto local_time = time.matched;
+
+			if (offset_date_time)
+			{
+				const auto dt = fill_date_time(matches);
+				if (dt)
+				{
+					auto odt = date_time{ *dt, false};
+					const auto& off_sign = matches[static_cast<std::size_t>(match_index::off_sign)];
+					assert(off_sign.matched);
+					if (*off_sign.first == 'z' ||
+						*off_sign.first == 'Z')
+					{
+						// default offset
+						odt.offset_hours = {};
+						odt.offset_minutes = {};
+						odt.offset_positive = true;
+						return { value_type::date_time, odt };
+					}
+
+					if (*off_sign.first == '+')
+						odt.offset_positive = true;
+					else if (*off_sign.first != '-')
+						return { value_type::bad, {} };
+
+					const auto& hours = matches[static_cast<std::size_t>(match_index::off_hours)];
+					assert(hours.matched);
+					auto ret = std::from_chars(&*hours.first, &*hours.second, odt.offset_hours);
+					if (ret.ptr == &*hours.second)
+					{
+						const auto& minutes = matches[static_cast<std::size_t>(match_index::off_minues)];
+						assert(minutes.matched);
+						ret = std::from_chars(&*minutes.first, &*minutes.first + minutes.length(), odt.offset_minutes);
+						if (ret.ptr == &*minutes.first + minutes.length())
+							return { value_type::date_time, odt };
+					}
+				}
+			}
+			else if (local_date_time)
+			{
+				auto dt = fill_date_time(matches);
+				if (dt)
+					return { value_type::local_date_time, *dt };
+			}
+			else if (local_date)
+			{
+				auto d = fill_date(matches);
+				if (d)
+					return { value_type::local_date, *d };
+			}
+			else if (local_time)
+			{
+				auto t = fill_time(matches);
+				if (t)
+					return { value_type::local_time, *t };
+			}
+
+			return { value_type::bad, {} };
+		}
+
+		return { value_type::unknown, {} };
 	}
 
 	// for parsing keywords, dates or numerical values
@@ -543,14 +892,24 @@ namespace another_toml
 		auto out = std::string{};
 		auto ch = char{};
 		auto eof = bool{};
+		const auto parent = strm.stack.back();
+		const auto parent_type = toml_data.tables[parent].type;
+		const auto end_on_comma = parent_type == node_type::array;
+		auto type = value_type::unknown;
 		while (strm.strm.good())
 		{
 			std::tie(ch, eof) = strm.get_char<NoThrow>();
-			if (eof)
-				break;
+			if constexpr (NoThrow)
+			{
+				if (eof)
+					break;
+			}
 
 			if (newline(strm, ch))
+			{
+				strm.nextline();
 				break;
+			}
 
 			out.push_back(ch);
 		}
@@ -558,31 +917,212 @@ namespace another_toml
 		while (!empty(out) && (out.back() == '\t' || out.back() == ' '))
 			out.pop_back();
 
+		if (!out.empty())
+		{
+			auto [type, value] = get_value_type(out);
+			if (type == value_type::bad)
+			{
+				if constexpr (NoThrow)
+				{
+					std::cerr << "Failed to parse value"s;
+					return false;
+				}
+				else
+					throw parser_error{ "Error parsing value"s };
+			}
+
+			if (type == value_type::out_of_range)
+			{
+				if constexpr (NoThrow)
+				{
+					std::cerr << "parsed value out of range"s;
+					return false;
+				}
+				else
+					throw parser_error{ "Error parsing value"s };
+			}
+
+			return insert_child<NoThrow>(toml_data, parent, 
+				internal_node{
+					std::move(out), node_type::value,
+					type, std::move(value)
+				}) != bad_index;
+		}
+
 		return false;
+	}
+
+	template<bool NoThrow, bool DoubleQuote>
+	static std::optional<std::string> multiline_string(parser_state& strm)
+	{
+		constexpr char quote_char = DoubleQuote ? '\"' : '\'';
+
+		// opening quotes have already been collected
+		auto [ch, eof] = strm.get_char<NoThrow>();
+		if constexpr (NoThrow)
+		{
+			if (eof)
+				return {};
+		}
+
+		// consume the first newline after '''/"""
+		if (newline(strm, ch))
+			strm.nextline();
+		else
+			strm.putback(ch);
+
+		auto str = std::string{};
+
+		while (strm.strm.good())
+		{
+			std::tie(ch, eof) = strm.get_char<NoThrow>();
+			if constexpr (NoThrow)
+			{
+				if (eof)
+					return {};
+			}
+
+			if (newline(strm, ch))
+			{
+				//look backwards for the end sequence
+				const auto last_quote = str.find_last_of(quote_char);
+				if (last_quote != std::string::npos		&&
+					last_quote > 1						&&
+					str[last_quote - 1] == quote_char	&&
+					str[last_quote - 2] == quote_char)
+				{
+					str.erase(last_quote - 2, (size(str) - last_quote) + 2);
+					assert(size(str) == last_quote - 2);
+					return str;
+				}
+
+				// implements '\' behaviour for double quoted strings
+				if constexpr (DoubleQuote)
+				{
+					const auto last = str.find_last_of('\\');
+					if (last != std::string::npos)
+					{
+						auto prev = last;
+						auto count = 1;
+						while (prev > 0 && str[--prev] == '\\')
+							++count;
+
+						if (count % 2 != 0)
+						{
+							str.erase(last, size(str) - last);
+
+							std::tie(ch, eof) = strm.get_char<NoThrow>();
+							if constexpr (NoThrow)
+							{
+								if (eof)
+									return {};
+							}
+
+							if (whitespace(ch, strm))
+								continue;
+						}
+					}
+				} // !doublequote
+			} // !newline(ch)
+
+			str.push_back(ch);
+		}
+
+		if constexpr (NoThrow)
+		{
+			return {};
+		}
+		else
+			throw parser_error{ "Error parsing multiline string"s };
+
+	}
+
+	template<bool NoThrow, bool DoubleQuote>
+	static bool parse_str_value(parser_state& strm, detail::toml_internal_data& toml_data)
+	{
+		constexpr char quote_char = DoubleQuote ? '\"' : '\'';
+		auto str = std::optional<std::string>{};
+		if (strm.strm.peek() == quote_char)
+		{
+			//quoted str was empty, or start of multiline string
+			strm.strm.ignore();
+			if (strm.strm.peek() == quote_char)
+			{
+				strm.strm.ignore();
+				str = multiline_string<NoThrow, DoubleQuote>(strm);
+				if (!str)
+					return false;
+
+				if constexpr (DoubleQuote)
+					replace_escape_chars<NoThrow>(*str);
+			}
+			else
+				str = std::string{};
+		}
+		else
+		{
+			//start normal quote str
+			str = get_quoted_str<DoubleQuote>(strm);
+			if (!str)
+			{
+				if constexpr (NoThrow)
+				{
+					std::cerr << "Illigal character in quoted string"s;
+					return false;
+				}
+				else
+					throw unexpected_character{ "Illigal character in quoted string"s };
+			}
+
+			if constexpr (DoubleQuote)
+			{
+				if (!replace_escape_chars<NoThrow>(*str))
+					return false;
+			}
+		}
+
+		assert(!strm.stack.empty());
+		assert(str);
+		insert_child<NoThrow>(toml_data, strm.stack.back(), internal_node{ std::move(*str), node_type::value, value_type::string });
+		strm.token_stream.emplace_back(token_type::value);
+		auto& parent_type = toml_data.tables[strm.stack.back()].type;
+		if (parent_type == node_type::key)
+			strm.stack.pop_back();
+
+		return true;
 	}
 
 	template<bool NoThrow>
 	static bool parse_value(parser_state& strm, detail::toml_internal_data& toml_data)
 	{
-		while (strm.strm.good())
+		//whitespace has already been consumed before here
+		auto [ch, eof] = strm.get_char<NoThrow>();
+		if constexpr (NoThrow)
 		{
-			const auto [ch, eof] = strm.get_char<NoThrow>();
 			if (eof)
 				return false;
-
-			// '[' start array
-
-			// '{' start inline table
-
-			// '"' string
-			// ''' literal string
-
-			// ''' && """ raw strings and raw literal strings
-
-			// non-# char start keyword, or digit based value
+		}
+		
+		if (ch == '[')
+		{
+			throw std::exception{ "unimpl" };
+			//array start
 		}
 
-		return false;
+		if (ch == '{') 
+		{
+			throw std::exception{ "unimpl" };
+			//inline table start
+		}
+
+		if (ch == '\"')
+			return parse_str_value<NoThrow, true>(strm, toml_data);
+
+		if (ch == '\'')
+			return parse_str_value<NoThrow, false>(strm, toml_data);
+
+		strm.putback(ch);
+		return parse_unquoted_value<NoThrow>(strm, toml_data);
 	}
 
 	static bool parse_comment(parser_state& strm) noexcept
@@ -613,18 +1153,24 @@ namespace another_toml
 	}
 
 	template<bool NoThrow>
-	static token parse_table_header(parser_state& strm, detail::toml_internal_data& toml_data)
+	static token parse_table_header(parser_state& strm, toml_internal_data& toml_data)
 	{
 		const auto name = parse_key_name<NoThrow>(strm, toml_data);
 		auto [ch, eof] = strm.get_char<NoThrow>();
-		if (eof)
-			return {};
+		if constexpr (NoThrow)
+		{
+			if (eof)
+				return {};
+		}
 
 		if (whitespace(ch, strm))
 		{
 			std::tie(ch, eof) = strm.get_char<NoThrow>();
-			if (eof)
-				return {};
+			if constexpr (NoThrow)
+			{
+				if (eof)
+					return{};
+			}
 		}
 
 		if (ch != ']')
@@ -650,94 +1196,7 @@ namespace another_toml
 				throw parser_error{ "table redefinition" };
 		}
 
-		return token{ name.parent, token_type::table_begin, std::move(name.name) };
-	}
-
-	template<bool NoThrow>
-	static token parse_token(parser_state& strm, detail::toml_internal_data& toml_data)
-	{
-		// find the next token
-		// root tokens, like a table header or key name
-		// or rhs tokens(anything that can follow a '=')
-
-		const auto parent = strm.stack.back();
-		const auto parent_type = toml_data.tables[parent].type;
-		if (parent_type == node_type::key)
-		{
-			if (parse_value<NoThrow>(strm, toml_data))
-				return token{ parent, token_type::value, ""s };
-			else
-			{
-				std::cerr << "Error while parsing value"s;
-				return {};
-			}
-		}
-
-		while (strm.strm.good())
-		{
-			auto [ch, eof] = strm.get_char<NoThrow>();
-			if (eof)
-				return {};
-
-			if (whitespace(ch, strm))
-				continue;
-
-			if(newline(strm, ch))
-			{
-				strm.col = {};
-				++strm.line;
-				continue;
-			}
-
-			if (ch == '[') // start table or array
-			{
-				if (strm.strm.peek() == '[')//array of tables
-				{
-					strm.strm.ignore();
-					;//parse_key_name(strm);
-					// check for extra "]"
-				}
-				else
-				{
-					// if the current parent is key then this should be the start of an array
-					return parse_table_header<NoThrow>(strm, toml_data);	
-				}
-			}
-
-			if (ch == '#')
-			{
-				if (parse_comment(strm))
-					continue;
-				else
-					return {};
-			}
-
-			strm.strm.putback(ch);
-			auto key_str = parse_key_name<NoThrow>(strm, toml_data);
-			std::tie(ch, eof) = strm.get_char<NoThrow>();
-
-			if (eof || !key_str.name)
-				return {};
-
-			whitespace(ch, strm);
-
-			//look for '='
-			std::tie(ch, eof) = strm.get_char<NoThrow>();
-			if (eof || ch != '=')
-			{
-				if constexpr (NoThrow)
-				{
-					std::cerr << "key names must be followed by '='"s;
-					return {};
-				}
-				else 
-					throw unexpected_character{ "key names must be followed by '='"s };
-			}
-
-			return { token{ key_str.parent, token_type::key, std::move(key_str.name) } };
-		}
-
-		return {};
+		return token{ name.parent, token_type::table, std::move(name.name) };
 	}
 
 	template<bool NoThrow>
@@ -762,41 +1221,143 @@ namespace another_toml
 		p_state.stack.emplace_back(root_table);
 		p_state.open_tables.emplace_back(root_table);
 		
+		//parse
+		//[tables]
+		//keys
+		//[[arrays of tables]]
+		//#comments
+		//
+		//	inline tables and their members are parsed under parse_value
 		while(strm.good())
 		{
-			token tok = parse_token<NoThrow>(p_state, *toml_data);
-			const auto& name = tok.value;
+			auto [ch, eof] = p_state.get_char<true>();
+			if (eof)
+				break;
 
-			if (!name)
+			if (whitespace(ch, p_state))
+				continue;
+
+			if (newline(p_state, ch))
 			{
-				if constexpr (NoThrow)
-					std::cerr << "Error getting token name\n";
-				else
-					throw parser_error{ "Error getting token name" };
+				p_state.nextline();
+				continue;
 			}
 
-			switch (tok.type)
+			if (ch == '[') // start table or array
 			{
-			case token_type::table_begin:
-			{
-				//close any open tables
-				for (auto t : p_state.open_tables)
+				if (p_state.strm.peek() == '[')//array of tables
 				{
-					assert(toml_data->tables[t].type == node_type::table);
-					toml_data->tables[t].closed = true;
+					p_state.strm.ignore();
+					;//parse_key_name(p_state);
+					// check for extra "]"
+					continue;
 				}
+				else
+				{
+					// if the current parent is key then this should be the start of an array
+					auto table_header = parse_table_header<NoThrow>(p_state, *toml_data);
+					auto& name = table_header.value;
+					
+					if (!name)
+					{
+						if constexpr (NoThrow)
+						{
+							insert_bad(*toml_data);
+							std::cerr << "Error getting table name\n";
+							break;
+						}
+						else
+							throw parser_error{ "Error getting table name" };
+					}
 
-				p_state.open_tables.clear();
-				// we must be in the root state
-				const auto table = insert_child_table<NoThrow>(tok.parent, *name, *toml_data);
-				p_state.stack.emplace_back(table);
-				
-			} continue;
-			case token_type::key:
-				// TODO: don't do this here, parse the value after getting the key and do nothing here.
-				auto key_index = insert_child_key<NoThrow>(tok.parent, *name, *toml_data);
-				p_state.stack.emplace_back(key_index);
-				continue;
+					for (auto t : p_state.open_tables)
+					{
+						assert(toml_data->tables[t].type == node_type::table);
+						toml_data->tables[t].closed = true;
+					}
+
+					p_state.open_tables.clear();
+					// we must be in the root state
+					const auto table = insert_child_table<NoThrow>(table_header.parent, std::move(*name), *toml_data);
+					p_state.stack.emplace_back(table);
+					continue;
+				}
+			}
+
+			if (ch == '#')
+			{
+				if (parse_comment(p_state))
+					continue;
+				else
+				{
+					insert_bad(*toml_data);
+					break;
+				}
+			}
+
+			p_state.putback(ch);
+			auto key_str = parse_key_name<NoThrow>(p_state, *toml_data);
+			std::tie(ch, eof) = p_state.get_char<NoThrow>();
+
+			if constexpr (NoThrow)
+			{
+				if (eof || !key_str.name)
+				{
+					insert_bad(*toml_data);
+					std::cerr << "Error getting key name\n"s;
+					break;
+				}
+			}
+
+			const auto key_index = insert_child_key<NoThrow>(key_str.parent, std::move(*key_str.name), *toml_data);
+			p_state.stack.emplace_back(key_index);
+
+			if (whitespace(ch, p_state))
+			{
+				std::tie(ch, eof) = p_state.get_char<NoThrow>();
+			}
+
+			if constexpr (NoThrow)
+			{
+				if (eof)
+				{
+					insert_bad(*toml_data);
+					std::cerr << "Error getting key name\n"s;
+					break;
+				}
+			}
+
+			//look for '='
+			if (ch != '=')
+			{
+				if constexpr (NoThrow)
+				{
+					insert_bad(*toml_data);
+					std::cerr << "key names must be followed by '='"s;
+					break;;
+				}
+				else
+					throw unexpected_character{ "key names must be followed by '='"s };
+			}
+
+			std::tie(ch, eof) = p_state.get_char<NoThrow>();
+			if constexpr (NoThrow)
+			{
+				if (eof || !key_str.name)
+				{
+					insert_bad(*toml_data);
+					std::cerr << "Error getting key name\n"s;
+					break;
+				}
+			}
+
+			if (!whitespace(ch, p_state))
+				p_state.putback(ch);
+
+			if (!parse_value<NoThrow>(p_state, *toml_data))
+			{
+				insert_bad(*toml_data);
+				break;
 			}
 		}
 

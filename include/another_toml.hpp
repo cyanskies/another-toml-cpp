@@ -58,6 +58,32 @@ namespace another_toml
 		bad_type
 	};
 
+	struct date
+	{
+		std::uint16_t year;
+		std::uint8_t month, day;
+	};
+
+	struct time
+	{
+		std::int8_t hours, minutes, seconds;
+		float seconds_frac;
+	};
+
+	struct local_date_time
+	{
+		date date;
+		time time;
+	};
+
+	struct date_time
+	{
+		local_date_time datetime;
+		bool offset_positive;
+		uint8_t offset_hours;
+		uint8_t offset_minutes;
+	};
+
 	class node;
 
 	class node_iterator
