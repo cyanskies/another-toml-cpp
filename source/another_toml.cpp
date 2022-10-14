@@ -28,23 +28,6 @@ namespace another_toml
 		0xEF, 0xBB, 0xBF
 	};
 
-	constexpr auto bad_index = std::numeric_limits<detail::index_t>::max();
-
-	enum class value_type {
-		string,
-		integer,
-		floating_point,
-		boolean,
-		date_time,
-		local_date_time,
-		local_date,
-		local_time,
-		unknown, // couldn't detect, can still be read as string
-		// The following values are internal only
-		bad, // detected as invalid
-		out_of_range
-	};
-
 	namespace detail
 	{	
 		using variant_t = std::variant<std::monostate, std::int64_t, double, bool,
@@ -69,6 +52,12 @@ namespace another_toml
 			static constexpr auto root_table = index_t{};
 			std::vector<internal_node> tables;
 		};
+
+		index_t get_next(const toml_internal_data& d, const index_t i) noexcept
+		{
+			assert(size(d.tables) > i);
+			return d.tables[i].next;
+		}
 	}
 
 	using namespace detail;
@@ -92,6 +81,106 @@ namespace another_toml
 		return bad_index;
 	}
 
+	bool node::good() const noexcept
+	{
+		return _data && (_index != bad_index ||
+			node_type::bad_type == _data->tables[_index].type);
+	}
+
+	// test node type
+	bool node::table() const noexcept
+	{
+		return node_type::table == _data->tables[_index].type;
+	}
+
+	bool node::array() const noexcept
+	{
+		return node_type::array == _data->tables[_index].type;
+	}
+
+	bool node::array_table() const noexcept
+	{
+		return node_type::array_tables == _data->tables[_index].type;
+	}
+
+	bool node::key() const noexcept
+	{
+		return node_type::key == _data->tables[_index].type;
+	}
+
+	bool node::value() const noexcept
+	{
+		return node_type::value == _data->tables[_index].type;
+	}
+
+	bool node::inline_table() const noexcept
+	{
+		return node_type::inline_table == _data->tables[_index].type;
+	}
+
+	value_type node::type() const noexcept
+	{
+		return _data->tables[_index].v_type;
+	}
+
+	bool node::has_children() const noexcept
+	{
+		return _data->tables[_index].child != bad_index;
+	}
+
+	std::vector<node> node::get_children() const
+	{
+		auto out = std::vector<node>{};
+		auto child = _data->tables[_index].child;
+		while (child != bad_index)
+		{
+			out.emplace_back(node{ _data, child });
+			child = _data->tables[child].next;
+		}
+		return out;
+	}
+
+	node node::get_child() const
+	{
+		return { _data, _data->tables[_index].child };
+	}
+
+	node_iterator node::begin() const noexcept
+	{
+		const auto child = _data->tables[_index].child;
+		if (child != bad_index)
+			return node_iterator{ _data, child };
+		else
+			return end();
+	}
+
+	node_iterator node::end() const noexcept
+	{
+		return node_iterator{};
+	}
+
+	std::size_t node::size() const noexcept
+	{
+		auto size = std::size_t{};
+		auto child = _data->tables[_index].child;
+		while (child != bad_index)
+		{
+			++size;
+			child = _data->tables[child].next;
+		}
+		return size;
+	}
+
+	const std::string& node::as_string() const noexcept
+	{
+		return _data->tables[_index].name;
+	}
+
+	node node::get_root_table() const noexcept
+	{
+		return node{ _data, {} };
+	}
+
 	void insert_bad(detail::toml_internal_data& d)
 	{
 		d.tables.emplace_back(internal_node{ {}, node_type::bad_type });
@@ -104,13 +193,13 @@ namespace another_toml
 		assert(parent != bad_index);
 		const auto new_index = size(d.tables);
 		auto& p = d.tables[parent];
+		auto allow_duplicates = p.type == node_type::array || p.type == node_type::array_tables;
 		if (p.child != bad_index)
 		{
 			detail::internal_node* child = &d.tables[p.child];
 			while (child->next != bad_index)
 			{
-				if (child->type == n.type &&
-					child->name == n.name)
+				if (!allow_duplicates && child->name == n.name)
 				{
 					if constexpr (NoThrow)
 						return bad_index;
@@ -127,8 +216,6 @@ namespace another_toml
 			p.child = new_index;
 
 		d.tables.emplace_back(std::move(n));
-
-
 		return new_index;
 	}
 
@@ -201,6 +288,10 @@ namespace another_toml
 					throw unexpected_eof{ "Parser encountered an unexcpected eof."};
 			}
 
+			#ifndef NDEBUG
+			toml_file.push_back(static_cast<char>(val));
+			#endif
+
 			++col;
 			return { static_cast<char>(val), {} };
 		}
@@ -212,10 +303,14 @@ namespace another_toml
 			return;
 		}
 
-		void putback(char ch) noexcept
+		void putback(const char ch) noexcept
 		{
 			--col;
 			strm.putback(ch);
+
+			#ifndef NDEBUG
+			toml_file.pop_back();
+			#endif
 			return;
 		}
 
@@ -227,11 +322,15 @@ namespace another_toml
 		// tables that need to be closed when encountering the next table header
 		std::vector<index_t> open_tables;
 		std::vector<token_type> token_stream;
-		index_t parent = bad_index;
-		index_t prev_sibling = bad_index;
+		//index_t parent = bad_index;
+		//index_t prev_sibling = bad_index;
 		std::size_t line = {};
 		std::size_t col = {};
+		#ifndef NDEBUG
+		std::string toml_file;
+		#endif
 	};
+
 
 	//new line(we check both, since file may have been opened in binary mode)
 	static bool newline(parser_state& strm, char ch) noexcept
@@ -305,6 +404,70 @@ namespace another_toml
 	{
 		auto table = detail::internal_node{ std::move(name) , node_type::table };
 		return insert_child<NoThrow>(d, parent, std::move(table));
+	}
+
+	template<bool NoThrow>
+	static index_t insert_child_table_array(index_t parent, std::string name, detail::toml_internal_data& d)
+	{
+		if (auto* node = &d.tables[parent];
+			node->child != bad_index)
+		{
+			auto child = node->child;
+			node = &d.tables[child];
+
+			while (node)
+			{
+				if (node->name == name)
+				{
+					if (node->type == node_type::array_tables)
+					{
+						parent = child;
+						break;
+					}
+					else
+					{
+						if constexpr (NoThrow)
+						{
+							std::cerr << "Tried to create table array with already used name: " << name << '\n';
+							return bad_index;
+						}
+						else
+							throw parser_error{ "Tried to create table array with already used name: "s + name };
+					}
+				}
+
+				if (node->next == bad_index)
+					break;
+				child = node->next;
+				node = &d.tables[child];
+			}
+
+			//create array
+			if (node->name != name)
+			{
+				parent = insert_child<NoThrow>(d, parent, internal_node{ std::move(name), node_type::array_tables});
+				if constexpr (NoThrow)
+				{
+					if (parent == bad_index)
+						return parent;
+				}
+				node = &d.tables[parent];
+			}
+		}
+		else
+		{
+			//create array as child
+			parent = insert_child<NoThrow>(d, parent, internal_node{ std::move(name), node_type::array_tables});
+			if constexpr (NoThrow)
+			{
+				if (parent == bad_index)
+					return parent;
+			}
+			node = &d.tables[parent];
+		}
+
+		return insert_child<NoThrow>(d, parent, 
+			internal_node{ {} , node_type::table });
 	}
 
 	template<bool NoThrow>
@@ -443,14 +606,22 @@ namespace another_toml
 			{
 				if constexpr (DoubleQuoted)
 				{
-					//don't break on excaped quote: '\"'
-					if (out.back() != '\\')
+					if (size(out) > 0)
 					{
-						strm.putback(ch);
-						break;
+						//don't break on excaped quote: '\"'
+						if (out.back() != '\\')
+						{
+							strm.putback(ch);
+							break;
+						}
+						// but do break if escaped slash followed by quote: "\\""
+						else if (size(out) > 2 && out[size(out) - 2] == '\\')
+						{
+							strm.putback(ch);
+							break;
+						}
 					}
-					// but do break if escaped slash followed by quote: "\\""
-					else if (out[size(out) - 2] == '\\')
+					else
 					{
 						strm.putback(ch);
 						break;
@@ -503,11 +674,17 @@ namespace another_toml
 		return out;
 	}
 
-	template<bool NoThrow>
+	template<bool NoThrow, bool Table = false>
 	static key_name parse_key_name(parser_state& strm, detail::toml_internal_data& d)
 	{
 		auto name = std::optional<std::string>{};
-		auto parent = strm.stack.back();
+		auto parent = root_table;
+		if constexpr (!Table)
+		{
+			if(!empty(strm.stack))
+				parent = strm.stack.back();
+		}
+
 		while (strm.strm.good())
 		{
 			auto [ch, eof] = strm.get_char<NoThrow>();
@@ -539,7 +716,7 @@ namespace another_toml
 						throw unexpected_character{ "Illigal character in name: \"" };
 				}
 				name = get_quoted_str<true>(strm);
-				if (!replace_escape_chars<NoThrow>(*name))
+				if (!name || !replace_escape_chars<NoThrow>(*name))
 					return {};
 
 				std::tie(ch, eof) = strm.get_char<NoThrow>();
@@ -568,8 +745,18 @@ namespace another_toml
 						throw unexpected_character{ "Illigal character in name: \'" };
 				}
 				name = get_quoted_str<false>(strm);
-				// TODO: eat the trailing '\''
-				//literals dont fix escape codes
+				std::tie(ch, eof) = strm.get_char<NoThrow>();
+				if (eof || ch != '\'')
+				{
+					if constexpr (NoThrow)
+					{
+						std::cerr << "Unexpected end of literal string: "s << name.value_or("\"\""s) << '\n';
+						return {};
+					}
+					else
+						throw unexpected_character{ "Unexpected end of literal string"s };
+				}
+				continue;
 			}
 			else if (ch == '.')
 			{
@@ -588,6 +775,38 @@ namespace another_toml
 					auto child = find_child(d, parent, *name);
 					if (child == bad_index)
 						child = insert_child_table<NoThrow>(parent, *name, d);
+					else if(const auto& c = d.tables[child];
+						c.type == node_type::array_tables)
+					{
+						if constexpr (!Table)
+						{
+							if constexpr (NoThrow)
+								std::cerr << "Name heirarchy for keys shouldn't include table arrays"s;
+							else
+								throw parser_error{ "Name heirarchy for keys shouldn't include table arrays"s };
+						}
+
+						child = c.child;
+						while (true)
+						{
+							auto* node = &d.tables[child];
+							if (node->next == bad_index)
+								break;
+							child = node->next;
+						}
+						// the name heirarchy has passed through an array_table
+						/*if (c.child != bad_index)
+						{
+							auto* node = &d.tables[c.child];
+							while (node)
+							{
+								if (node->next == bad_index)
+									break;
+								child = node->next;
+								node = &d.tables[child];
+							}
+						}*/
+					}
 					parent = child;
 					name = {};
 					continue;
@@ -605,11 +824,6 @@ namespace another_toml
 		}
 
 		return { parent, name };
-	}
-
-	template<bool NoThrow>
-	static node parse_array() noexcept(NoThrow)
-	{
 	}
 
 	static int chtoi(const char* first, const char* last) noexcept
@@ -636,6 +850,8 @@ namespace another_toml
 		seconds,
 		seconds_frac,
 		offset,
+		off_z,
+		off_unused,
 		off_sign,
 		off_hours,
 		off_minues
@@ -756,7 +972,7 @@ namespace another_toml
 		//	-oct
 		// doesn't check for min/max value
 		constexpr auto int_reg =
-			R"(^[\+\-]?[1-9]+(_([\d])+)*$|^0x[\dA-Fa-f]+(_[\dA-Fa-f]*)*|0b[01]+(_[01]*)*|0o[0-7]+(_([0-7])+)*|^[\+\-]?0$)";
+			R"(^[\+\-]?[1-9]+(_?([\d])+)*$|^0x[\dA-Fa-f]+(_?[\dA-Fa-f]*)*|0b[01]+(_?[01]*)*|0o[0-7]+(_?([0-7])+)*|^[\+\-]?0$)";
 
 		if (std::regex_match(beg, end, std::regex{ int_reg }))
 		{
@@ -807,7 +1023,7 @@ namespace another_toml
 		}
 
 		constexpr auto date_time_reg =
-			R"(^((\d{4})-(\d{2})-(\d{2}))?[T t]?((\d{2}):(\d{2}):(\d{2})(\.\d+)?)?(([zZ]|[\+\-])(\d{2}):(\d{2}))?$)";
+			R"(^((\d{4})-(\d{2})-(\d{2}))?[T t]?((\d{2}):(\d{2}):(\d{2})(\.\d+)?)?(([zZ])|(([\+\-])(\d{2}):(\d{2})))?)";
 		if (auto matches = std::match_results<std::string_view::iterator>{};
 			std::regex_match(beg, end, matches, std::regex{ date_time_reg }))
 		{
@@ -830,10 +1046,8 @@ namespace another_toml
 				if (dt)
 				{
 					auto odt = date_time{ *dt, false};
-					const auto& off_sign = matches[static_cast<std::size_t>(match_index::off_sign)];
-					assert(off_sign.matched);
-					if (*off_sign.first == 'z' ||
-						*off_sign.first == 'Z')
+					const auto& off_z = matches[static_cast<std::size_t>(match_index::off_z)];
+					if (off_z.matched)
 					{
 						// default offset
 						odt.offset_hours = {};
@@ -842,6 +1056,8 @@ namespace another_toml
 						return { value_type::date_time, odt };
 					}
 
+					const auto& off_sign = matches[static_cast<std::size_t>(match_index::off_sign)];
+					assert(off_sign.matched);
 					if (*off_sign.first == '+')
 						odt.offset_positive = true;
 					else if (*off_sign.first != '-')
@@ -878,11 +1094,9 @@ namespace another_toml
 				if (t)
 					return { value_type::local_time, *t };
 			}
-
-			return { value_type::bad, {} };
 		}
 
-		return { value_type::unknown, {} };
+		return { value_type::bad, {} };
 	}
 
 	// for parsing keywords, dates or numerical values
@@ -894,7 +1108,7 @@ namespace another_toml
 		auto eof = bool{};
 		const auto parent = strm.stack.back();
 		const auto parent_type = toml_data.tables[parent].type;
-		const auto end_on_comma = parent_type == node_type::array;
+		const auto array_elm = parent_type == node_type::array;
 		auto type = value_type::unknown;
 		while (strm.strm.good())
 		{
@@ -905,7 +1119,32 @@ namespace another_toml
 					break;
 			}
 
-			if (newline(strm, ch))
+			if (ch == '#')
+			{
+				strm.putback(ch);
+				break;
+			}
+
+			if (array_elm)
+			{
+				if (ch == ',' || ch == ']')
+				{
+					strm.putback(ch);
+					break;
+				}
+
+				if (newline(strm, ch))
+				{
+					if constexpr (NoThrow)
+					{
+						std::cerr << "Unexpected newline in array element\n"s;
+						return false;
+					}
+					else
+						throw parser_error{ "Unexpected newline in array element"s };
+				}
+			}
+			else if (newline(strm, ch))
 			{
 				strm.nextline();
 				break;
@@ -924,7 +1163,7 @@ namespace another_toml
 			{
 				if constexpr (NoThrow)
 				{
-					std::cerr << "Failed to parse value"s;
+					std::cerr << "Failed to parse value\n"s;
 					return false;
 				}
 				else
@@ -935,13 +1174,14 @@ namespace another_toml
 			{
 				if constexpr (NoThrow)
 				{
-					std::cerr << "parsed value out of range"s;
+					std::cerr << "parsed value out of range\n"s;
 					return false;
 				}
 				else
 					throw parser_error{ "Error parsing value"s };
 			}
 
+			strm.token_stream.push_back(token_type::value);
 			return insert_child<NoThrow>(toml_data, parent, 
 				internal_node{
 					std::move(out), node_type::value,
@@ -982,48 +1222,45 @@ namespace another_toml
 					return {};
 			}
 
-			if (newline(strm, ch))
+			if (size(str) > 2)
 			{
-				//look backwards for the end sequence
-				const auto last_quote = str.find_last_of(quote_char);
-				if (last_quote != std::string::npos		&&
-					last_quote > 1						&&
-					str[last_quote - 1] == quote_char	&&
-					str[last_quote - 2] == quote_char)
+				const auto view = std::string_view{ next(begin(str), size(str) - 3), end(str) };
+				if (std::ranges::all_of(view, [](auto ch) {
+					return ch == quote_char;
+					}) && strm.strm.peek() != quote_char)
 				{
-					str.erase(last_quote - 2, (size(str) - last_quote) + 2);
-					assert(size(str) == last_quote - 2);
-					return str;
-				}
-
-				// implements '\' behaviour for double quoted strings
-				if constexpr (DoubleQuote)
-				{
-					const auto last = str.find_last_of('\\');
-					if (last != std::string::npos)
+					// implements '\' behaviour for double quoted strings
+					if constexpr (DoubleQuote)
 					{
-						auto prev = last;
-						auto count = 1;
-						while (prev > 0 && str[--prev] == '\\')
-							++count;
-
-						if (count % 2 != 0)
+						const auto last = str.find_last_of('\\');
+						if (last != std::string::npos)
 						{
-							str.erase(last, size(str) - last);
+							auto prev = last;
+							auto count = 1;
+							while (prev > 0 && str[--prev] == '\\')
+								++count;
 
-							std::tie(ch, eof) = strm.get_char<NoThrow>();
-							if constexpr (NoThrow)
+							if (count % 2 != 0)
 							{
-								if (eof)
-									return {};
-							}
+								str.erase(last, size(str) - last);
 
-							if (whitespace(ch, strm))
-								continue;
+								std::tie(ch, eof) = strm.get_char<NoThrow>();
+								if constexpr (NoThrow)
+								{
+									if (eof)
+										return {};
+								}
+
+								if (whitespace(ch, strm))
+									continue;
+							}
 						}
-					}
-				} // !doublequote
-			} // !newline(ch)
+					} // !doublequote
+
+					strm.putback(ch);
+					return std::string{ begin(str), next(begin(str), size(str) - 3) };
+				}
+			}
 
 			str.push_back(ch);
 		}
@@ -1079,15 +1316,319 @@ namespace another_toml
 				if (!replace_escape_chars<NoThrow>(*str))
 					return false;
 			}
+
+			if (strm.strm.peek() == quote_char)
+				strm.strm.ignore();
+			else
+			{
+				if constexpr (NoThrow)
+				{
+					std::cerr << "Illigal character in quoted string"s;
+					return false;
+				}
+				else
+					throw unexpected_character{ "Illigal character in quoted string"s };
+			}
 		}
 
 		assert(!strm.stack.empty());
 		assert(str);
 		insert_child<NoThrow>(toml_data, strm.stack.back(), internal_node{ std::move(*str), node_type::value, value_type::string });
 		strm.token_stream.emplace_back(token_type::value);
-		auto& parent_type = toml_data.tables[strm.stack.back()].type;
-		if (parent_type == node_type::key)
-			strm.stack.pop_back();
+
+		return true;
+	}
+
+	static bool parse_comment(parser_state& strm) noexcept
+	{
+		while (strm.strm.good())
+		{
+			auto [ch, eof] = strm.get_char<true>();
+			if (eof)
+				break;
+
+			if (newline(strm, ch))
+			{
+				strm.nextline();
+				break;
+			}
+
+			if (comment_forbidden_char(ch))
+			{
+				std::cerr << "Forbidden character in comment: " << ch << '(' << static_cast<int>(ch) << ")\n";
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	template<bool NoThrow>
+	static bool parse_value(parser_state&, detail::toml_internal_data&);
+
+	template<bool NoThrow>
+	static bool parse_array(parser_state& strm, detail::toml_internal_data& toml_data)
+	{
+		assert(!empty(strm.stack));
+		auto arr = insert_child<NoThrow>(toml_data, strm.stack.back(), internal_node{
+				{}, node_type::array
+			});
+
+		strm.token_stream.emplace_back(token_type::array);
+		strm.stack.emplace_back(arr);
+
+		while (strm.strm.good())
+		{
+			auto [ch, eof] = strm.get_char<NoThrow>();
+			if constexpr (NoThrow)
+			{
+				if (eof)
+					return false;
+			}
+
+			if (whitespace(ch, strm))
+				continue;
+
+			if (newline(strm, ch))
+			{
+				strm.nextline();
+				continue;
+			}
+
+			if (ch == ']')
+			{
+				strm.token_stream.emplace_back(token_type::array_end);
+				strm.stack.pop_back();
+				return true;
+			}
+
+			if (ch == '#')
+			{
+				parse_comment(strm);
+				continue;
+			}
+
+			//get value
+			strm.putback(ch);
+			if (!parse_value<NoThrow>(strm, toml_data))
+				return false;
+		
+			std::tie(ch, eof) = strm.get_char<NoThrow>();
+			if constexpr (NoThrow)
+			{
+				if (eof)
+					return false;
+			}
+
+			if (whitespace(ch, strm))
+			{
+				std::tie(ch, eof) = strm.get_char<NoThrow>();
+				if constexpr (NoThrow)
+				{
+					if (eof)
+						return false;
+				}
+			}
+
+			if (ch == ',')
+			{
+				strm.token_stream.emplace_back(token_type::comma);
+				continue;
+			}
+
+			if (ch == ']')
+			{
+				strm.token_stream.emplace_back(token_type::array_end);
+				strm.stack.pop_back(); 
+				return true;
+			}
+
+			if (newline(strm, ch))
+			{
+				strm.nextline();
+				continue;
+			}
+
+			return false;
+		}
+
+		if constexpr (NoThrow)
+		{
+			std::cerr << "Stream error while parsing array\n";
+			return false;
+		}
+		else 
+			throw parser_error{ "Stream error while parsing array"s };
+	}
+
+	template<bool NoThrow>
+	static bool parse_inline_table(parser_state& strm, toml_internal_data& toml_data)
+	{
+		// push back an inline table
+		assert(!empty(strm.stack));
+		const auto parent = strm.stack.back();
+		const auto& p = toml_data.tables[parent];
+		assert(p.type == node_type::key || p.type == node_type::array);
+		const auto table = insert_child<NoThrow>(toml_data, parent, internal_node{ {}, node_type::inline_table });
+		strm.stack.emplace_back(table);
+		while (strm.strm.good())
+		{
+			auto [ch, eof] = strm.get_char<NoThrow>();
+			if constexpr (NoThrow)
+			{
+				if (eof)
+					return false;
+			}
+
+			if (whitespace(ch, strm))
+				continue;
+
+			if (newline(strm, ch))
+			{
+				if constexpr (NoThrow)
+				{
+					std::cerr << "Illigal newline in inline table\n";
+					return false;
+				}
+				else
+					throw unexpected_character{ "Illigal newline in inline table"s };
+			}
+
+			if (ch == '}')
+			{
+				if (strm.token_stream.back() == token_type::comma)
+				{
+					if constexpr (NoThrow)
+					{
+						std::cerr << "Trailing comma is forbidden in inline tables\n"s;
+						insert_bad(toml_data);
+						return false;
+					}
+					else
+						throw unexpected_character{ "Trailing comma is forbidden in inline tables"s };
+				}
+
+				toml_data.tables[table].closed = true;
+				assert(table == strm.stack.back());
+				strm.stack.pop_back();
+				return true;
+			}
+
+			strm.putback(ch);
+			if (!parse_key_value<NoThrow>(strm, toml_data))
+				return false;
+
+			std::tie(ch, eof) = strm.get_char<NoThrow>();
+			if constexpr (NoThrow)
+			{
+				if (eof)
+					return false;
+			}
+
+			if(whitespace(ch, strm))
+			{
+				std::tie(ch, eof) = strm.get_char<NoThrow>();
+				if constexpr (NoThrow)
+				{
+					if (eof)
+						return false;
+				}
+			}
+
+			//next must be ',' or '}'
+			if (ch == ',')
+			{
+				strm.token_stream.emplace_back(token_type::comma);
+				continue;
+			}
+			strm.putback(ch);
+		}
+
+		return true;
+	}
+
+	template<bool NoThrow>
+	static bool parse_key_value(parser_state& strm, toml_internal_data& toml_data)
+	{
+		auto key_str = parse_key_name<NoThrow>(strm, toml_data);
+
+		if (!key_str.name)
+		{
+			if constexpr (NoThrow)
+			{
+				insert_bad(toml_data);
+				std::cerr << "Error getting key name\n"s;
+				return false;
+			}
+			else
+				throw parser_error{ "Error parsing key name"s };
+		}
+
+		auto [ch, eof] = strm.get_char<NoThrow>();
+
+		if constexpr (NoThrow)
+		{
+			if (eof || !key_str.name)
+			{
+				insert_bad(toml_data);
+				std::cerr << "Error getting key name\n"s;
+				return false;
+			}
+		}
+
+		const auto key_index = insert_child_key<NoThrow>(key_str.parent, std::move(*key_str.name), toml_data);
+		strm.stack.emplace_back(key_index);
+		strm.token_stream.emplace_back(token_type::key);
+
+		if (whitespace(ch, strm))
+			std::tie(ch, eof) = strm.get_char<NoThrow>();
+
+		if constexpr (NoThrow)
+		{
+			if (eof)
+			{
+				insert_bad(toml_data);
+				std::cerr << "Error getting key name\n"s;
+				return false;
+			}
+		}
+
+		//look for '='
+		if (ch != '=')
+		{
+			if constexpr (NoThrow)
+			{
+				insert_bad(toml_data);
+				std::cerr << "key names must be followed by '='"s;
+				return false;
+			}
+			else
+				throw unexpected_character{ "key names must be followed by '='"s };
+		}
+
+		std::tie(ch, eof) = strm.get_char<NoThrow>();
+		if constexpr (NoThrow)
+		{
+			if (eof || !key_str.name)
+			{
+				insert_bad(toml_data);
+				std::cerr << "Error getting key name\n"s;
+				return false;
+			}
+		}
+
+		if (!whitespace(ch, strm))
+			strm.putback(ch);
+
+		const auto ret = parse_value<NoThrow>(strm, toml_data);
+		if constexpr (NoThrow)
+		{
+			if (!ret)
+			{
+				insert_bad(toml_data);
+				return false;
+			}
+		}
 
 		return true;
 	}
@@ -1102,60 +1643,33 @@ namespace another_toml
 			if (eof)
 				return false;
 		}
+
+		auto ret = false;
 		
 		if (ch == '[')
+			ret = parse_array<NoThrow>(strm, toml_data);
+		else if (ch == '{')
+			ret = parse_inline_table<NoThrow>(strm, toml_data);
+		else if (ch == '\"')
+			ret = parse_str_value<NoThrow, true>(strm, toml_data);
+		else if (ch == '\'')
+			ret = parse_str_value<NoThrow, false>(strm, toml_data);
+		else
 		{
-			throw std::exception{ "unimpl" };
-			//array start
+			strm.putback(ch);
+			ret = parse_unquoted_value<NoThrow>(strm, toml_data);
 		}
 
-		if (ch == '{') 
-		{
-			throw std::exception{ "unimpl" };
-			//inline table start
-		}
-
-		if (ch == '\"')
-			return parse_str_value<NoThrow, true>(strm, toml_data);
-
-		if (ch == '\'')
-			return parse_str_value<NoThrow, false>(strm, toml_data);
-
-		strm.putback(ch);
-		return parse_unquoted_value<NoThrow>(strm, toml_data);
-	}
-
-	static bool parse_comment(parser_state& strm) noexcept
-	{
-		while (strm.strm.good())
-		{
-			auto [ch, eof] = strm.get_char<true>();
-			if (eof)
-				break;
-
-			if (newline(strm, ch))
-			{
-				strm.col = {};
-				++strm.line;
-				break;
-			}
-
-			if (comment_forbidden_char(ch))
-			{
-				std::cerr << "Forbidden character in comment: " << ch << '(' << static_cast<int>(ch) << ")\n";
-				return false;
-			}
-
-			++strm.col;
-		}
-
-		return true;
+		const auto parent_type = toml_data.tables[strm.stack.back()].type;
+		if (parent_type == node_type::key)
+			strm.stack.pop_back();
+		return ret;
 	}
 
 	template<bool NoThrow>
 	static token parse_table_header(parser_state& strm, toml_internal_data& toml_data)
 	{
-		const auto name = parse_key_name<NoThrow>(strm, toml_data);
+		const auto name = parse_key_name<NoThrow, true>(strm, toml_data);
 		auto [ch, eof] = strm.get_char<NoThrow>();
 		if constexpr (NoThrow)
 		{
@@ -1248,13 +1762,65 @@ namespace another_toml
 				if (p_state.strm.peek() == '[')//array of tables
 				{
 					p_state.strm.ignore();
-					;//parse_key_name(p_state);
-					// check for extra "]"
+					p_state.stack.pop_back();
+					auto header = parse_table_header<NoThrow>(p_state, *toml_data);
+					auto& name = header.value;
+					if (!name)
+					{
+						if constexpr (NoThrow)
+						{
+							insert_bad(*toml_data);
+							std::cerr << "Error getting table name\n";
+							break;
+						}
+						else
+							throw parser_error{ "Error getting table name" };
+					}
+
+					for (auto t : p_state.open_tables)
+					{
+						assert(toml_data->tables[t].type == node_type::table);
+						toml_data->tables[t].closed = true;
+					}
+
+					p_state.open_tables.clear();
+
+					auto& parent = header.parent;
+					auto table = insert_child_table_array<NoThrow>(header.parent, std::move(*name), *toml_data);
+					p_state.stack.emplace_back(table);
+					p_state.token_stream.push_back(token_type::array_table);
+					p_state.open_tables.emplace_back(table);
+
+					std::tie(ch, eof) = p_state.get_char<NoThrow>();
+
+					if constexpr (NoThrow)
+					{
+						if (eof)
+						{
+							insert_bad(*toml_data);
+							std::cerr << "Unexpected eof in table array name\n"s;
+							break;
+						}
+					}
+
+					if (ch != ']')
+					{
+						if constexpr (NoThrow)
+						{
+							insert_bad(*toml_data);
+							std::cerr << "Unexpected character; expected ']'\n"s;
+							break;
+						}
+						else
+							throw unexpected_character{ "Unexpected character while parsing table name; expected: ']'"s };
+					}
+
 					continue;
 				}
 				else
 				{
 					// if the current parent is key then this should be the start of an array
+					p_state.stack.pop_back();
 					auto table_header = parse_table_header<NoThrow>(p_state, *toml_data);
 					auto& name = table_header.value;
 					
@@ -1280,6 +1846,8 @@ namespace another_toml
 					// we must be in the root state
 					const auto table = insert_child_table<NoThrow>(table_header.parent, std::move(*name), *toml_data);
 					p_state.stack.emplace_back(table);
+					p_state.open_tables.emplace_back(table);
+					p_state.token_stream.emplace_back(token_type::table);
 					continue;
 				}
 			}
@@ -1296,70 +1864,12 @@ namespace another_toml
 			}
 
 			p_state.putback(ch);
-			auto key_str = parse_key_name<NoThrow>(p_state, *toml_data);
-			std::tie(ch, eof) = p_state.get_char<NoThrow>();
-
-			if constexpr (NoThrow)
-			{
-				if (eof || !key_str.name)
-				{
-					insert_bad(*toml_data);
-					std::cerr << "Error getting key name\n"s;
-					break;
-				}
-			}
-
-			const auto key_index = insert_child_key<NoThrow>(key_str.parent, std::move(*key_str.name), *toml_data);
-			p_state.stack.emplace_back(key_index);
-
-			if (whitespace(ch, p_state))
-			{
-				std::tie(ch, eof) = p_state.get_char<NoThrow>();
-			}
-
-			if constexpr (NoThrow)
-			{
-				if (eof)
-				{
-					insert_bad(*toml_data);
-					std::cerr << "Error getting key name\n"s;
-					break;
-				}
-			}
-
-			//look for '='
-			if (ch != '=')
-			{
-				if constexpr (NoThrow)
-				{
-					insert_bad(*toml_data);
-					std::cerr << "key names must be followed by '='"s;
-					break;;
-				}
-				else
-					throw unexpected_character{ "key names must be followed by '='"s };
-			}
-
-			std::tie(ch, eof) = p_state.get_char<NoThrow>();
-			if constexpr (NoThrow)
-			{
-				if (eof || !key_str.name)
-				{
-					insert_bad(*toml_data);
-					std::cerr << "Error getting key name\n"s;
-					break;
-				}
-			}
-
-			if (!whitespace(ch, p_state))
-				p_state.putback(ch);
-
-			if (!parse_value<NoThrow>(p_state, *toml_data))
-			{
-				insert_bad(*toml_data);
+			if (!parse_key_value<NoThrow>(p_state, *toml_data))
 				break;
-			}
 		}
+
+		if (toml_data->tables.back().type == node_type::bad_type)
+			return {};
 
 		return { std::move(toml_data), {} };
 	}

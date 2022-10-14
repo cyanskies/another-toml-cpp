@@ -1,6 +1,7 @@
 #ifndef ANOTHER_TOML_HPP
 #define ANOTHER_TOML_HPP
 
+#include <cassert>
 #include <filesystem>
 #include <istream>
 #include <memory>
@@ -43,17 +44,38 @@ namespace another_toml
 	namespace detail
 	{
 		using index_t = std::size_t;
+		constexpr auto bad_index = std::numeric_limits<detail::index_t>::max();
+
 		struct toml_internal_data;
+
+		index_t get_next(const toml_internal_data&, index_t) noexcept;
 
 		struct no_throw_t {};
 	}
+
+	enum class value_type {
+		string,
+		integer,
+		floating_point,
+		boolean,
+		date_time,
+		local_date_time,
+		local_date,
+		local_time,
+		unknown, // couldn't detect, can still be read as string
+		// The following values are internal only
+		bad, // detected as invalid
+		out_of_range
+	};
 
 	enum class node_type
 	{
 		table,
 		array, 
+		array_tables,
 		key,
 		value,
+		inline_table,
 		comment, // note, we don't provide access to comments or preserve them
 		bad_type
 	};
@@ -84,19 +106,13 @@ namespace another_toml
 		uint8_t offset_minutes;
 	};
 
-	class node;
-
-	class node_iterator
-	{
-	public:
-		using iterator_concept = std::forward_iterator_tag;
-	};
+	class node_iterator;
 
 	class node 
 	{
 	public:
 		node(std::shared_ptr<detail::toml_internal_data> shared_data = {},
-			detail::index_t i = {})
+			detail::index_t i = detail::bad_index)
 			: _data{ shared_data }, _index{ i } {}
 
 		//test if this is a valid node: calling any function other than good()
@@ -112,8 +128,12 @@ namespace another_toml
 		// test node type
 		bool table() const noexcept;
 		bool array() const noexcept;
+		bool array_table() const noexcept;
 		bool key() const noexcept;
 		bool value() const noexcept;
+		bool inline_table() const noexcept;
+
+		value_type type() const noexcept;
 
 		// get the nodes children
 		// children are any nodes deeper in the heirarchy than the current node
@@ -122,28 +142,19 @@ namespace another_toml
 		//		for a value: none
 		//		for a key: anonymous table, value, array(of arrays of values)
 		bool has_children() const noexcept;
-		std::size_t child_count() const noexcept;
-		node get_child() const noexcept;
 		std::vector<node> get_children() const;
-		node get_next_sibling() const noexcept;
-
-		// search all children for the named node
-		// can use dots to search for subchildren
-		node find_child(std::string_view) const noexcept;
-
+		node get_child() const;
 
 		// iterator based interface
 		node_iterator begin() const noexcept;
 		node_iterator end() const noexcept;
 		std::size_t size() const noexcept;
 
-		std::string_view as_string() const noexcept;
+		const std::string& as_string() const noexcept;
 		// as_XXX
 
 		//returns the root table at the base of the hierarchy
 		node get_root_table() const noexcept;
-		// works like find_child, but starts from the root
-		node find(std::string_view name) const noexcept;
 		
 		operator bool() const noexcept
 		{
@@ -155,6 +166,65 @@ namespace another_toml
 		detail::index_t _index;
 	};
 
+	class node_iterator
+	{
+	public:
+		using iterator_concept = std::forward_iterator_tag;
+
+		node_iterator(std::shared_ptr<detail::toml_internal_data> sh = {},
+			detail::index_t i = detail::bad_index)
+			: _data{ sh }, _index{ i }
+		{}
+
+		node operator*() const noexcept
+		{
+			assert(_index != detail::bad_index &&
+				_data);
+			return node{ _data, _index };
+		}
+
+		node_iterator& operator++() noexcept
+		{
+			if (_index == detail::bad_index)
+				return *this;
+			assert(_data);
+			if (const auto next = detail::get_next(*_data, _index);
+				next == detail::bad_index)
+			{
+				_data = {};
+				_index = detail::bad_index;
+			}
+			else
+				_index = next;
+			return *this;
+		}
+
+		node_iterator operator++(int) const noexcept {
+			if (_index == detail::bad_index)
+				return *this;
+			assert(_data);
+			const auto next = detail::get_next(*_data, _index);
+			if (next == detail::bad_index)
+				return node_iterator{};
+			return node_iterator{ _data, next };
+		}
+
+		bool operator==(const node_iterator& rhs) const noexcept
+		{
+			return _data == rhs._data && _index == rhs._index;
+		}
+
+		bool operator!=(const node_iterator& rhs) const noexcept
+		{
+			return !(*this == rhs);
+		}
+
+	private:
+		std::shared_ptr<detail::toml_internal_data> _data;
+		detail::index_t _index;
+	};
+
+
 	constexpr auto no_throw = detail::no_throw_t{};
 
 	node parse(std::string_view toml);
@@ -164,8 +234,9 @@ namespace another_toml
 	node parse(std::string_view toml, detail::no_throw_t) noexcept;
 	node parse(std::istream&, detail::no_throw_t) noexcept;
 	node parse(const std::filesystem::path& filename, detail::no_throw_t) noexcept;
-	
 }
+
+
 
 namespace std
 {
