@@ -24,21 +24,34 @@ namespace another_toml
 	class unexpected_eof : public parser_error
 	{
 	public:
-		using  parser_error::parser_error;
+		using parser_error::parser_error;
 	};
 
 	//thrown when encountering an unexpected character
 	class unexpected_character :public parser_error
 	{
 	public:
-		using  parser_error::parser_error;
+		using parser_error::parser_error;
 	};
 
 	//thrown if the toml file contains duplicate table or key declarations
 	class duplicate_element :public parser_error
 	{
 	public:
-		using  parser_error::parser_error;
+		using parser_error::parser_error;
+	};
+
+	class wrong_type : public parser_error
+	{
+	public:
+		using parser_error::parser_error;
+	};
+
+	// thrown if an invalid raw unicode or escaped unicode char was found
+	class invalid_unicode_char : public parser_error
+	{
+	public:
+		using parser_error::parser_error;
 	};
 
 	namespace detail
@@ -47,6 +60,12 @@ namespace another_toml
 		constexpr auto bad_index = std::numeric_limits<detail::index_t>::max();
 
 		struct toml_internal_data;
+
+		struct toml_data_deleter
+		{
+		public:
+			void operator()(toml_internal_data*) noexcept;
+		};
 
 		index_t get_next(const toml_internal_data&, index_t) noexcept;
 
@@ -119,9 +138,6 @@ namespace another_toml
 		//								on an invalid node is undefined behaviour
 		// this will return false for nodes returned by the fucntions:
 		//	get_child() for a node that has no children
-		//	get_next() for a node that has no more siblings
-		//  find()/find_child() if the node wasn't found
-		//
 		// if you use iterator/ranges to access child nodes then you don't have to worry about this.
 		bool good() const noexcept;
 
@@ -151,7 +167,13 @@ namespace another_toml
 		std::size_t size() const noexcept;
 
 		const std::string& as_string() const noexcept;
-		// as_XXX
+		std::int64_t as_int() const;
+		double as_floating() const;
+		bool as_boolean() const;
+		date_time as_date_time() const;
+		local_date_time as_date_time_local() const;
+		date as_date_local() const;
+		time as_time_local() const;
 
 		//returns the root table at the base of the hierarchy
 		node get_root_table() const noexcept;
@@ -224,19 +246,91 @@ namespace another_toml
 		detail::index_t _index;
 	};
 
-
 	constexpr auto no_throw = detail::no_throw_t{};
 
 	node parse(std::string_view toml);
 	node parse(std::istream&); 
-	node parse(const std::filesystem::path& filename);
+	//node parse(const std::filesystem::path& filename);
 
 	node parse(std::string_view toml, detail::no_throw_t) noexcept;
 	node parse(std::istream&, detail::no_throw_t) noexcept;
-	node parse(const std::filesystem::path& filename, detail::no_throw_t) noexcept;
+	//node parse(const std::filesystem::path& filename, detail::no_throw_t) noexcept;
+
+	struct writer_options
+	{
+		// if true, avoids unrequired whitespace eg: name = value -> name=value
+		bool compact_spacing = false;
+		// how many characters before splitting next array element to new line
+		// set to 0 to never split
+		int array_line_length = 80;
+	};
+
+	class writer
+	{
+	public:
+		// note their is an implicit root table
+		// you cannot end_table to end it
+		// you can write values and arrays into it, before adding
+		// other tables
+
+		// [tables]
+		// use end table to control nesting
+		void begin_table(std::string_view);
+		void end_table();
+
+		// arrays:
+		// name = [ elements ]
+		// use write_element() to add elements
+		// or begin_inline_table to add a table as an element
+		void begin_array(std::string_view name);
+		void end_array();
+
+		// begins an inline table
+		// name will be ignored if being added as an array member
+		void begin_inline_table(std::string_view name);
+		void end_inline_table();
+
+		// begin an array of tables
+		// [[array]]
+		// keep calling begin_array_tables with the same name
+		// to add new tables to the array
+		void begin_array_tables(std::string_view);
+		void end_array_tables();
+
+		// key: values
+		void write(std::string_view name, std::string value);
+		void write(std::string_view name, std::int64_t value);
+		void write(std::string_view name, double value);
+		void write(std::string_view name, bool value);
+		void write(std::string_view name, date_time value);
+		void write(std::string_view name, local_date_time value);
+		void write(std::string_view name, date value);
+		void write(std::string_view name, time value);
+
+		// write values on their own, for arrays
+		void write_element(std::string value);
+		void write_element(std::int64_t value);
+		void write_element(double value);
+		void write_element(bool value);
+		void write_element(date_time value);
+		void write_element(local_date_time value);
+		void write_element(date value);
+		void write_element(time value);
+
+		void set_options(writer_options o)
+		{
+			_opts = o;
+		}
+
+		std::ostream& operator<<(std::ostream& lhs) const;
+
+	private:
+		writer_options _opts;
+		std::unique_ptr<detail::toml_internal_data, detail::toml_data_deleter> _data;
+	};
+
+	writer make_writer();
 }
-
-
 
 namespace std
 {
