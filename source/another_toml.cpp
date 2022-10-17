@@ -613,6 +613,25 @@ namespace another_toml
 
 	const auto unicode_bad_conversion = "conversion_error"s;
 
+	template<bool NoThrow>
+	static std::optional<std::string> to_unicode_str(char32_t ch)
+	{
+		auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ unicode_bad_conversion };
+		const auto u8 = cvt.to_bytes(ch);
+		if (u8 == unicode_bad_conversion)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << "Invalid utf-8 char"s;
+				return {};
+			}
+			else
+				throw parser_error{ "Invalid utf-8 chars"s };
+		}
+
+		return u8;
+	}
+
 	// replace string chars with proper escape codes
 	template<bool NoThrow>
 	static bool replace_escape_chars(std::string& s) noexcept(NoThrow)
@@ -684,26 +703,27 @@ namespace another_toml
 							throw unexpected_character{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], &s[code_end] } };
 					}
 
-					auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ unicode_bad_conversion };
-					const auto u8 = cvt.to_bytes(int_val);
-					if (u8 == unicode_bad_conversion)
+					const auto u8 = to_unicode_str<NoThrow>(int_val);
+					if constexpr (NoThrow)
 					{
-						if constexpr (NoThrow)
+						if (!u8)
 						{
 							std::cerr << "Failed to convert unicode escape code to utf-8: "s << std::string_view{ &s[code_beg], &s[code_end] } << '\n';
 							return false;
 						}
-						else
-							throw parser_error{ "Failed to convert unicode escape code to utf-8: "s + std::string{ &s[code_beg], &s[code_end] } };
 					}
 
-					s.replace(code_beg, code_end - code_beg, u8);
-					pos += size(u8);
+					assert(u8);
+					s.replace(code_beg, code_end - code_beg, *u8);
+					pos += size(*u8);
 					continue;
 				}
 
 				if constexpr (NoThrow)
+				{
 					std::cerr << "Illigal escape code in quoted string: \"\\"s << s[code_mid] << "\"\n"s;
+					return false;
+				}
 				else
 					throw parser_error{ "Illigal escape code in quoted string: \"\\"s + s[code_mid] + "\""s };
 			}
@@ -714,18 +734,88 @@ namespace another_toml
 		return true;
 	}
 
-	template<bool DoubleQuoted>
+	constexpr bool is_unicode(char c) noexcept
+	{
+		return c & 0b10000000;
+	}
+
+	std::int32_t parse_unicode_char(char c, parser_state& strm)
+	{
+		int bytes = 1;
+		if (c | 0b10000000)
+			++bytes;
+		else
+		{
+			//not unicode
+			return utf8_error_char;
+		}
+
+		if (c | 0b01000000)
+			++bytes;
+		if (c | 0b00100000)
+			++bytes;
+
+		assert(bytes >= 1);
+		auto out = std::int32_t{};
+		switch (bytes)
+		{
+		case 2:
+			out = c & 0b00011111;
+			out = out << 5;
+			break;
+		case 3:
+			out = c & 0b00001111;
+			out = out << 4;
+			break;
+		case 4:
+			out = c & 0b00000111;
+			out = out << 3;
+			break;
+		}
+
+		while (bytes > 1)
+		{
+			auto [ch, eof] = strm.get_char<true>();
+			if (eof)
+				return utf8_error_char;
+			out |= ch & 0b00111111;
+			out = out << 6;
+			--bytes;
+		}
+
+		if (valid_utf8_char(out))
+			return out;
+
+		return utf8_error_char;
+	}
+
+	template<bool NoThrow, bool DoubleQuoted>
 	static std::optional<std::string> get_quoted_str(parser_state& strm)
 	{
 		constexpr auto delim = DoubleQuoted ? '\"' : '\'';
 		auto out = std::string{};
 		while (strm.strm.good())
 		{
-			const auto [ch, eof] = strm.get_char<true>();
-			if (eof)
-				return {}; // illigal character in string
+			const auto [ch, eof] = strm.get_char<NoThrow>();
+			if constexpr (NoThrow)
+			{
+				if (eof)
+				{
+					std::cerr << "Unexpected end of file in quoted string\n"s;
+					return {}; // illigal character in string
+				}
+			}
+
 			if (newline(strm, ch))
-				return {}; // illigal character in string
+			{
+				if constexpr (NoThrow)
+				{
+					std::cerr << "Illigal newline in quoted string\n"s;
+					return {};
+				}
+				else
+					throw unexpected_character{ "Illigal newline in quoted string"s };
+			}
 
 			if (ch == delim)
 			{
@@ -756,6 +846,49 @@ namespace another_toml
 				{
 					strm.putback(ch);
 					break;
+				}
+			}
+
+			if (std::ranges::any_of(escape_codes_char, [ch](auto c) {
+				return ch == c;
+				}) && ch != '\t')
+			{
+				if constexpr (NoThrow)
+				{
+					std::cerr << "Illigal control character in string\n"s;
+					return {};
+				}
+				else
+					throw unexpected_character{ "Illigal control character in string"s };
+			}
+			else if (is_unicode(ch))
+			{
+				const auto unicode = parse_unicode_char(ch, strm);
+				if (unicode == utf8_error_char)
+				{
+					if constexpr (NoThrow)
+					{
+						std::cerr << "Invalid unicode character in string\n"s;
+						return {};
+					}
+					else
+						throw parser_error{ "Invalid unicode character in string"s };
+				}
+				else
+				{
+					const auto u8 = to_unicode_str<NoThrow>(unicode);
+					if constexpr (NoThrow)
+					{
+						if (!u8)
+						{
+							std::cerr << "Invalid unicode character in string\n"s;
+							return {};
+						}
+					}
+
+					assert(u8);
+					out.append(*u8);
+					continue;
 				}
 			}
 
@@ -851,18 +984,17 @@ namespace another_toml
 					else
 						throw unexpected_character{ "Illigal character in name: \"" };
 				}
-				name = get_quoted_str<true>(strm);
-				if (!name)
+				name = get_quoted_str<NoThrow, true>(strm);
+				if constexpr (NoThrow)
 				{
-					if constexpr (NoThrow)
+					if (!name)
 					{
-						std::cerr << "Unable to parse name\n"s;
 						insert_bad(d);
 						return {};
 					}
-					else
-						throw parser_error{ "Error parsing name"s };
 				}
+
+				assert(name);
 
 				if (!replace_escape_chars<NoThrow>(*name))
 				{
@@ -874,17 +1006,16 @@ namespace another_toml
 				}
 
 				std::tie(ch, eof) = strm.get_char<NoThrow>();
-				if (eof || ch != '\"')
+				if constexpr (NoThrow)
 				{
-					if constexpr (NoThrow)
+					if (eof || ch != '\"')
 					{
 						std::cerr << "Unexpected end of quoted string: "s << name.value_or("\"\""s) << '\n';
 						insert_bad(d);
 						return {};
 					}
-					else
-						throw unexpected_character{ "Unexpected end of quoted string"s };
 				}
+				
 				continue;
 			}
 			else if(ch == '\'')
@@ -900,19 +1031,27 @@ namespace another_toml
 					else
 						throw unexpected_character{ "Illigal character in name: \'" };
 				}
-				name = get_quoted_str<false>(strm);
-				std::tie(ch, eof) = strm.get_char<NoThrow>();
-				if (eof || ch != '\'')
+				name = get_quoted_str<NoThrow, false>(strm);
+				if constexpr (NoThrow)
 				{
-					if constexpr (NoThrow)
+					if(!name)
 					{
 						std::cerr << "Unexpected end of literal string: "s << name.value_or("\"\""s) << '\n';
 						insert_bad(d);
 						return {};
 					}
-					else
-						throw unexpected_character{ "Unexpected end of literal string"s };
 				}
+
+				std::tie(ch, eof) = strm.get_char<NoThrow>();
+				if constexpr (NoThrow)
+				{
+					if (eof || ch!= '\'')
+					{
+						insert_bad(d);
+						return{};
+					}
+				}
+				
 				continue;
 			}
 			else if (ch == '.')
@@ -1509,16 +1648,14 @@ namespace another_toml
 		else
 		{
 			//start normal quote str
-			str = get_quoted_str<DoubleQuote>(strm);
-			if (!str)
+			str = get_quoted_str<NoThrow, DoubleQuote>(strm);
+			if constexpr (NoThrow)
 			{
-				if constexpr (NoThrow)
+				if (!str)
 				{
-					std::cerr << "Illigal character in quoted string"s;
+					std::cerr << "Illigal character in string"s;
 					return false;
 				}
-				else
-					throw unexpected_character{ "Illigal character in quoted string"s };
 			}
 
 			if constexpr (DoubleQuote)
@@ -1547,61 +1684,6 @@ namespace another_toml
 		strm.token_stream.emplace_back(token_type::value);
 
 		return true;
-	}
-
-	std::int32_t parse_unicode_char(char c, parser_state& strm)
-	{
-		int bytes = 1;
-		if (c | 0b10000000)
-			++bytes;
-		else
-		{
-			//not unicode
-			return utf8_error_char;
-		}
-
-		if (c | 0b01000000)
-			++bytes;
-		if (c | 0b00100000)
-			++bytes;
-
-		assert(bytes >= 1);
-		auto out = std::int32_t{};
-		switch (bytes)
-		{
-		case 2:
-			out = c & 0b00011111;
-			out = out << 5;
-			break;
-		case 3:
-			out = c & 0b00001111;
-			out = out << 4;
-			break;
-		case 4:
-			out = c & 0b00000111;
-			out = out << 3;
-			break;
-		}
-
-		while (bytes > 1)
-		{
-			auto [ch, eof] = strm.get_char<true>();
-			if (eof)
-				return utf8_error_char;
-			out |= ch & 0b00111111;
-			out = out << 6;
-			--bytes;
-		}
-
-		if (valid_utf8_char(out))
-			return out;
-
-		return utf8_error_char;
-	}
-
-	constexpr bool is_unicode(char c) noexcept
-	{
-		return c & 0b10000000;
 	}
 
 	// consumes the next endline if present
