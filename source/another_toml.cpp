@@ -1605,7 +1605,8 @@ namespace another_toml
 	}
 
 	// consumes the next endline if present
-	static bool parse_comment(parser_state& strm) noexcept
+	template<bool NoThrow>
+	static bool parse_comment(parser_state& strm) noexcept(NoThrow)
 	{
 		while (strm.strm.good())
 		{
@@ -1621,8 +1622,14 @@ namespace another_toml
 
 			if (comment_forbidden_char(ch))
 			{
-				std::cerr << "Forbidden character in comment: " << ch << '(' << static_cast<int>(ch) << ")\n";
-				return false;
+				if constexpr (NoThrow)
+				{
+					std::cerr << "Forbidden character in comment: " << ch << '(' << static_cast<int>(ch) << ")\n";
+					return false;
+				}
+				else
+					throw unexpected_character{ "Forbidden character in comment: "s + ch +
+					'(' + std::to_string(static_cast<int>(ch)) + ')' };
 			}
 
 			if (is_unicode(ch))
@@ -1630,8 +1637,13 @@ namespace another_toml
 				auto u_ch = parse_unicode_char(ch, strm);
 				if (u_ch == utf8_error_char)
 				{
-					std::cerr << "Invalid unicode character(s) in stream\n"s;
-					return false;
+					if constexpr (NoThrow)
+					{
+						std::cerr << "Invalid unicode character(s) in stream\n";
+						return false;
+					}
+					else
+						throw unexpected_character{ "Invalid unicode character(s) in stream"s };
 				}
 			}
 		}
@@ -1680,7 +1692,12 @@ namespace another_toml
 
 			if (ch == '#')
 			{
-				parse_comment(strm);
+				if (!parse_comment<NoThrow>(strm))
+				{
+					if constexpr (NoThrow)
+						return false;
+				}
+
 				continue;
 			}
 
@@ -1949,21 +1966,26 @@ namespace another_toml
 		return ret;
 	}
 
-	template<bool NoThrow>
-	static key_name parse_table_header(parser_state& strm, toml_internal_data& toml_data)
+	template<bool NoThrow, bool Array>
+	static index_t parse_table_header(parser_state& strm, toml_internal_data& toml_data)
 	{
+		assert(toml_data.tables[strm.stack.back()].type == node_type::table ||
+			toml_data.tables[strm.stack.back()].type == node_type::array_tables);
+		strm.stack.pop_back();
+		strm.close_tables(toml_data);
+
 		const auto name = parse_key_name<NoThrow, true>(strm, toml_data);
 		if constexpr (NoThrow)
 		{
 			if (!name.name)
-				return {};
+				return bad_index;
 		}
 		
 		auto [ch, eof] = strm.get_char<NoThrow>();
 		if constexpr (NoThrow)
 		{
 			if (eof)
-				return {};
+				return bad_index;
 		}
 
 		if (whitespace(ch, strm))
@@ -1972,7 +1994,7 @@ namespace another_toml
 			if constexpr (NoThrow)
 			{
 				if (eof)
-					return{};
+					return bad_index;
 			}
 		}
 
@@ -1981,10 +2003,25 @@ namespace another_toml
 			if constexpr (NoThrow)
 			{
 				std::cerr << "Unexpected character, was expecting ']'; found: " << ch << '\n';
-				return {};
+				return bad_index;
 			}
 			else
 				throw unexpected_character{ "Unexpected character, was expecting ']'" };
+		}
+
+		if constexpr (Array)
+		{
+			if (ch != ']')
+			{
+				if constexpr (NoThrow)
+				{
+					insert_bad(toml_data);
+					std::cerr << "Unexpected character while parsing array table name; expected: ']'\n"s;
+					return bad_index;
+				}
+				else
+					throw unexpected_character{ "Unexpected character while parsing array table name; expected: ']'"s };
+			}
 		}
 
 		if (const auto table = find_table(*name.name, name.parent, toml_data);
@@ -1993,13 +2030,87 @@ namespace another_toml
 			if constexpr (NoThrow)
 			{
 				std::cerr << "This table: " << *name.name << "; has already been defined\n";
-				return {};
+				return bad_index;
 			}
 			else
 				throw parser_error{ "table redefinition" };
 		}
 
-		return name;
+		if (!name.name)
+		{
+			if constexpr (NoThrow)
+			{
+				insert_bad(toml_data);
+				std::cerr << "Error getting table name\n";
+				return bad_index;
+			}
+			else
+				throw parser_error{ "Error getting table name" };
+		}
+
+		auto& parent = name.parent;
+		auto table = bad_index;
+		if constexpr (Array)
+		{
+			table = insert_child_table_array<NoThrow>(name.parent, std::move(*name.name), toml_data);
+			strm.token_stream.emplace_back(token_type::array_table);
+		}
+		else
+		{
+			table = find_table(*name.name, name.parent, toml_data);
+			if (table == bad_index)
+				table = insert_child_table<NoThrow>(name.parent, std::move(*name.name), toml_data, table_def::header);
+			strm.token_stream.emplace_back(token_type::table);
+		}
+
+		if constexpr (NoThrow)
+		{
+			if (table == bad_index)
+				return bad_index;
+		}
+
+		strm.stack.emplace_back(table);
+		strm.open_tables.emplace_back(table);
+
+		std::tie(ch, eof) = strm.get_char<NoThrow>();
+		if constexpr (NoThrow)
+		{
+			if (eof)
+				return table;
+		}
+
+		if (whitespace(ch, strm))
+		{
+			std::tie(ch, eof) = strm.get_char<NoThrow>();
+			if constexpr (NoThrow)
+			{
+				if (eof)
+					return table;
+			}
+		}
+
+		if (ch == '#')
+		{
+			if (!parse_comment<NoThrow>(strm))
+			{
+				if constexpr (NoThrow)
+					return bad_index;
+			}
+		}
+		else if (!newline(strm, ch))
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << "Unexpected character after table header\n"s;
+				return bad_index;
+			}
+			else
+				throw unexpected_character{ "Unexpected character after table header"s };
+		}
+		else
+			strm.nextline();
+
+		return table;
 	}
 
 	template<bool NoThrow>
@@ -2051,95 +2162,31 @@ namespace another_toml
 				if (p_state.strm.peek() == '[')//array of tables
 				{
 					p_state.ignore();
-					p_state.stack.pop_back();
-					p_state.close_tables(*toml_data);
-					auto header = parse_table_header<NoThrow>(p_state, *toml_data);
-					auto& name = header.name;
-					if (!name)
-					{
-						if constexpr (NoThrow)
-						{
-							insert_bad(*toml_data);
-							std::cerr << "Error getting table name\n";
-							break;
-						}
-						else
-							throw parser_error{ "Error getting table name" };
-					}
-
-					auto& parent = header.parent;
-					auto table = insert_child_table_array<NoThrow>(header.parent, std::move(*name), *toml_data);
-
+					auto table = parse_table_header<NoThrow, true>(p_state, *toml_data);
 					if constexpr (NoThrow)
 					{
 						if (table == bad_index)
 							break;
 					}
 
-					p_state.stack.emplace_back(table);
-					p_state.token_stream.push_back(token_type::array_table);
-					p_state.open_tables.emplace_back(table);
-
-					std::tie(ch, eof) = p_state.get_char<NoThrow>();
-
-					if constexpr (NoThrow)
-					{
-						if (eof)
-						{
-							insert_bad(*toml_data);
-							std::cerr << "Unexpected eof in table array name\n"s;
-							break;
-						}
-					}
-
-					if (ch != ']')
-					{
-						if constexpr (NoThrow)
-						{
-							insert_bad(*toml_data);
-							std::cerr << "Unexpected character; expected ']'\n"s;
-							break;
-						}
-						else
-							throw unexpected_character{ "Unexpected character while parsing table name; expected: ']'"s };
-					}
-
 					continue;
 				}
 				else
 				{
-					p_state.stack.pop_back();
-					p_state.close_tables(*toml_data);
-
-					auto table_header = parse_table_header<NoThrow>(p_state, *toml_data);
-					auto& name = table_header.name;
-					
-					if (!name)
+					auto table = parse_table_header<NoThrow, false>(p_state, *toml_data);
+					if constexpr (NoThrow)
 					{
-						if constexpr (NoThrow)
-						{
-							insert_bad(*toml_data);
-							std::cerr << "Error getting table name\n";
+						if (table == bad_index)
 							break;
-						}
-						else
-							throw parser_error{ "Error getting table name" };
 					}
 
-					auto table = find_table(*name, table_header.parent, *toml_data);
-
-					if(table == bad_index)
-						table = insert_child_table<NoThrow>(table_header.parent, std::move(*name), *toml_data, table_def::header);
-					p_state.stack.emplace_back(table);
-					p_state.open_tables.emplace_back(table);
-					p_state.token_stream.emplace_back(token_type::table);
 					continue;
 				}
 			}
 
 			if (ch == '#')
 			{
-				if (parse_comment(p_state))
+				if (parse_comment<NoThrow>(p_state))
 					continue;
 				else
 				{
@@ -2148,8 +2195,6 @@ namespace another_toml
 						insert_bad(*toml_data);
 						break;
 					}
-					else
-						throw unexpected_character{ "Illigal character in comment"s };
 				}
 			}
 
@@ -2170,10 +2215,13 @@ namespace another_toml
 
 				if (ch == '#')
 				{
-					if (!parse_comment(p_state))
+					if (!parse_comment<NoThrow>(p_state))
 					{
-						insert_bad(*toml_data);
-						break;
+						if constexpr (NoThrow)
+						{
+							insert_bad(*toml_data);
+							break;
+						}
 					}
 				}
 				else if (!newline(p_state, ch))
