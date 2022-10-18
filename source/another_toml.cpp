@@ -733,6 +733,15 @@ namespace another_toml
 
 		return true;
 	}
+	constexpr bool is_unicode_start(char c) noexcept
+	{
+		return c & 0b11000000;
+	}
+
+	constexpr bool is_unicode_continuation(char c) noexcept
+	{
+		return c & 0x80 && !(c & 0x40);
+	}
 
 	constexpr bool is_unicode(char c) noexcept
 	{
@@ -741,18 +750,15 @@ namespace another_toml
 
 	std::int32_t parse_unicode_char(char c, parser_state& strm)
 	{
-		int bytes = 1;
-		if (c | 0b10000000)
-			++bytes;
-		else
-		{
-			//not unicode
+		if (!is_unicode_start(c))
 			return utf8_error_char;
-		}
 
-		if (c | 0b01000000)
+		int bytes = 1;
+		if (c & 0b01000000)
 			++bytes;
-		if (c | 0b00100000)
+		if (c & 0b00100000)
+			++bytes;
+		if (c & 0b00010000)
 			++bytes;
 
 		assert(bytes >= 1);
@@ -761,32 +767,33 @@ namespace another_toml
 		{
 		case 2:
 			out = c & 0b00011111;
-			out = out << 5;
 			break;
 		case 3:
 			out = c & 0b00001111;
-			out = out << 4;
 			break;
 		case 4:
 			out = c & 0b00000111;
-			out = out << 3;
 			break;
 		}
 
-		while (bytes > 1)
+		while (bytes-- > 1)
 		{
 			auto [ch, eof] = strm.get_char<true>();
-			if (eof)
+			if (eof || !is_unicode_continuation(ch))
 				return utf8_error_char;
+			out = out << 6; 
 			out |= ch & 0b00111111;
-			out = out << 6;
-			--bytes;
 		}
 
 		if (valid_utf8_char(out))
 			return out;
 
 		return utf8_error_char;
+	}
+
+	constexpr bool invalid_string_chars(char ch) noexcept
+	{
+		return ((ch >= 0 && ch < 32) || ch == 127) && ch != '\t';
 	}
 
 	template<bool NoThrow, bool DoubleQuoted>
@@ -849,9 +856,7 @@ namespace another_toml
 				}
 			}
 
-			if (std::ranges::any_of(escape_codes_char, [ch](auto c) {
-				return ch == c;
-				}) && ch != '\t')
+			if (invalid_string_chars(ch))
 			{
 				if constexpr (NoThrow)
 				{
@@ -932,6 +937,7 @@ namespace another_toml
 		return out;
 	}
 
+	// TODO: break up into smaller functions, the if chain is too chaotic
 	template<bool NoThrow, bool Table = false>
 	static key_name parse_key_name(parser_state& strm, detail::toml_internal_data& d)
 	{
@@ -1099,14 +1105,18 @@ namespace another_toml
 					}
 					else if (c.closed && c.table_type == table_def::header)
 					{
-						if constexpr (NoThrow)
+						if constexpr(!Table)
 						{
-							std::cerr << "Using dotted keys to add to a previously defined table is not allowed\n"s;
-							insert_bad(d);
-							return {};
+							if constexpr (NoThrow)
+							{
+								std::cerr << "Using dotted keys to add to a previously defined table is not allowed\n"s;
+								insert_bad(d);
+								return {};
+							}
+							else
+								throw parser_error{ "Using dotted keys to add to a previously defined table is not allowed"s };
 						}
-						else
-							throw parser_error{ "Using dotted keys to add to a previously defined table is not allowed"s };
+						// fall out of if
 					}
 					else if (!(c.type == node_type::table || c.type == node_type::array_tables))
 					{
@@ -1165,6 +1175,7 @@ namespace another_toml
 		year,
 		month,
 		day,
+		date_time_seperator,
 		time,
 		hours,
 		minues,
@@ -1180,77 +1191,217 @@ namespace another_toml
 
 	using reg_matches = std::match_results<std::string_view::iterator>;
 
-	static std::optional<date> fill_date(const reg_matches& matches) noexcept
+	template<bool NoThrow>
+	static std::optional<date> fill_date(const reg_matches& matches) noexcept(NoThrow)
 	{
+		const auto error_msg = "Error parsing date"s;
+
 		auto out = date{};
 		assert(matches[static_cast<std::size_t>(match_index::date)].matched);
 		const auto& years = matches[static_cast<std::size_t>(match_index::year)];
 		assert(years.matched);
 		auto ret = std::from_chars(&*years.first, &*years.second, out.year);
-		if (ret.ptr == &*years.second)
+		if (ret.ptr != &*years.second)
 		{
-			const auto& months = matches[static_cast<std::size_t>(match_index::month)];
-			assert(months.matched);
-			ret = std::from_chars(&*months.first, &*months.second, out.month);
-			if (ret.ptr == &*months.second)
+			if constexpr (NoThrow)
 			{
-				const auto& days = matches[static_cast<std::size_t>(match_index::day)];
-				assert(days.matched);
-				ret = std::from_chars(&*days.first, &*days.first + days.length(), out.day);
-				if (ret.ptr == &*days.first + days.length())
-					return out;
+				std::cerr << error_msg;
+				return {};
 			}
+			else
+				throw parser_error{ error_msg };
 		}
 
-		return {};
+		const auto& months = matches[static_cast<std::size_t>(match_index::month)];
+		assert(months.matched);
+		ret = std::from_chars(&*months.first, &*months.second, out.month);
+		if (ret.ptr != &*months.second)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << error_msg;
+				return {};
+			}
+			else
+				throw parser_error{ error_msg };
+		}
+
+		if (out.month == 0 || out.month > 12)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << "Month out of range\n"s;
+				return {};
+			}
+			else
+				throw parser_error{ "Month out of range"s };
+		}
+
+		const auto& days = matches[static_cast<std::size_t>(match_index::day)];
+		assert(days.matched);
+		const auto day_end = &*days.first + days.length();
+		ret = std::from_chars(&*days.first, day_end , out.day);
+		if (ret.ptr != day_end)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << error_msg;
+				return {};
+			}
+			else
+				throw parser_error{ error_msg };
+		}
+
+		auto max_days = 31;
+		switch (out.month)
+		{
+		case 2:
+			max_days = 28;
+			break;
+		case 4:
+			[[fallthrough]];
+		case 6:
+			[[fallthrough]];
+		case 9:
+			[[fallthrough]];
+		case 11:
+			max_days = 30;
+		}
+
+		if (out.day == 0 || out.day > max_days)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << "Day out of range\n"s;
+				return {};
+			}
+			else
+				throw parser_error{ "Day out of range"s };
+		}
+
+		return out;
 	}
 
-	static std::optional<time> fill_time(const reg_matches& matches) noexcept
+	template<bool NoThrow>
+	static std::optional<time> fill_time(const reg_matches& matches) noexcept(NoThrow)
 	{
+		const auto error_parsing_time_msg = "Error parsing time"s;
+
 		auto out = time{};
 		assert(matches[static_cast<std::size_t>(match_index::time)].matched);
 		const auto& hours = matches[static_cast<std::size_t>(match_index::hours)];
 		assert(hours.matched);
 		auto ret = std::from_chars(&*hours.first, &*hours.second, out.hours);
-		if (ret.ptr == &*hours.second)
+		if (ret.ptr != &*hours.second)
 		{
-			const auto& minutes = matches[static_cast<std::size_t>(match_index::minues)];
-			assert(minutes.matched);
-			ret = std::from_chars(&*minutes.first, &*minutes.second, out.minutes);
-			if (ret.ptr == &*minutes.second)
+			if constexpr (NoThrow)
 			{
-				const auto& seconds = matches[static_cast<std::size_t>(match_index::seconds)];
-				assert(seconds.matched);
-				ret = std::from_chars(&*seconds.first, &*seconds.first + seconds.length(), out.seconds);
-				if (ret.ptr == &*seconds.first + seconds.length())
+				std::cerr << error_parsing_time_msg;
+				return {};
+			}
+			else
+				throw parser_error{ error_parsing_time_msg };
+		}
+
+		if (out.hours > 23)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << "Hours out of range\n"s;
+				return {};
+			}
+			else
+				throw parser_error{ "Hours out of range"s };
+		}
+			
+		const auto& minutes = matches[static_cast<std::size_t>(match_index::minues)];
+		assert(minutes.matched);
+		ret = std::from_chars(&*minutes.first, &*minutes.second, out.minutes);
+		if (ret.ptr != &*minutes.second)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << error_parsing_time_msg;
+				return{};
+			}
+			else
+				throw parser_error{ error_parsing_time_msg };
+		}
+
+		if (out.minutes > 59)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << "Minutes out of range\n"s;
+				return {};
+			}
+			else
+				throw parser_error{ "Minutes out of range"s };
+		}
+
+		const auto& seconds = matches[static_cast<std::size_t>(match_index::seconds)];
+		assert(seconds.matched);
+		const auto seconds_end = &*seconds.first + seconds.length();
+		ret = std::from_chars(&*seconds.first, seconds_end, out.seconds);
+		if (ret.ptr != seconds_end)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << error_parsing_time_msg;
+				return{};
+			}
+			else
+				throw parser_error{ error_parsing_time_msg };
+		}
+
+		if (out.seconds > 60)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << "Seconds out of range\n"s;
+				return {};
+			}
+			else
+				throw parser_error{ "Seconds out of range"s };
+		}
+
+		const auto& seconds_frac = matches[static_cast<std::size_t>(match_index::seconds_frac)];
+		if (seconds_frac.matched)
+		{
+			const auto frac_end = &*seconds_frac.first + seconds_frac.length();
+			ret = std::from_chars(&*seconds_frac.first, frac_end, out.seconds_frac);
+			if (ret.ptr != frac_end)
+			{
+				if constexpr (NoThrow)
 				{
-					const auto& seconds_frac = matches[static_cast<std::size_t>(match_index::seconds_frac)];
-					if (seconds_frac.matched)
-					{
-						ret = std::from_chars(&*seconds_frac.first, &*seconds_frac.first + seconds_frac.length(), out.seconds_frac);
-						if (ret.ptr == &*seconds_frac.first + seconds_frac.length())
-							return out;
-					}
-					else
-						return out;
+					std::cerr << error_parsing_time_msg;
+					return{};
 				}
+				else
+					throw parser_error{ error_parsing_time_msg };
 			}
 		}
 
-		return {};
+		return out;
 	}
 
-	static std::optional<local_date_time> fill_date_time(const reg_matches& matches) noexcept
+	template<bool NoThrow>
+	static std::optional<local_date_time> fill_date_time(const reg_matches& matches) noexcept(NoThrow)
 	{
-		const auto date = fill_date(matches);
-		const auto time = fill_time(matches);
-		if (date && time)
-			return local_date_time{ *date, *time };
-	
-		return {};
+		const auto date = fill_date<NoThrow>(matches);
+		const auto time = fill_time<NoThrow>(matches);
+		
+		if constexpr (NoThrow)
+		{
+			if (!date || !time)
+				return {};
+		}
+		
+		return local_date_time{ *date, *time };
 	}
 
-	static std::pair<value_type, variant_t> get_value_type(std::string_view str) noexcept
+	template<bool NoThrow>
+	static std::pair<value_type, variant_t> get_value_type(std::string_view str) noexcept(NoThrow)
 	{
 		if (empty(str))
 			return { value_type::bad, {} };
@@ -1344,26 +1495,38 @@ namespace another_toml
 		}
 
 		constexpr auto date_time_reg =
-			R"(^((\d{4})-(\d{2})-(\d{2}))?[T t]?((\d{2}):(\d{2}):(\d{2})(\.\d+)?)?(([zZ])|(([\+\-])(\d{2}):(\d{2})))?)";
+			R"(^((\d{4})-(\d{2})-(\d{2}))?([T t])?((\d{2}):(\d{2}):(\d{2})(\.\d+)?)?(([zZ])|(([\+\-])(\d{2}):(\d{2})))?)";
 		if (auto matches = std::match_results<std::string_view::iterator>{};
 			std::regex_match(beg, end, matches, std::regex{ date_time_reg }))
 		{
 			//date
 			const auto& date = matches[static_cast<std::size_t>(match_index::date)];
+			const auto& d_t_seperator = matches[static_cast<std::size_t>(match_index::date_time_seperator)];
 			const auto& time = matches[static_cast<std::size_t>(match_index::time)];
 			const auto& offset = matches[static_cast<std::size_t>(match_index::offset)];
 		
 			const auto offset_date_time = date.matched &&
+				d_t_seperator.matched &&
 				time.matched &&
 				offset.matched;
+
 			const auto local_date_time = date.matched &&
+				d_t_seperator.matched &&
 				time.matched;
-			const auto local_date = date.matched;
-			const auto local_time = time.matched;
+
+			const auto local_date = date.matched &&
+				!d_t_seperator.matched &&
+				!time.matched &&
+				!offset.matched;
+
+			const auto local_time = !date.matched &&
+				!d_t_seperator.matched &&
+				time.matched &&
+				!offset.matched;
 
 			if (offset_date_time)
 			{
-				const auto dt = fill_date_time(matches);
+				const auto dt = fill_date_time<NoThrow>(matches);
 				if (dt)
 				{
 					auto odt = date_time{ *dt, false};
@@ -1399,19 +1562,19 @@ namespace another_toml
 			}
 			else if (local_date_time)
 			{
-				auto dt = fill_date_time(matches);
+				auto dt = fill_date_time<NoThrow>(matches);
 				if (dt)
 					return { value_type::local_date_time, *dt };
 			}
 			else if (local_date)
 			{
-				auto d = fill_date(matches);
+				auto d = fill_date<NoThrow>(matches);
 				if (d)
 					return { value_type::local_date, *d };
 			}
 			else if (local_time)
 			{
-				auto t = fill_time(matches);
+				auto t = fill_time<NoThrow>(matches);
 				if (t)
 					return { value_type::local_time, *t };
 			}
@@ -1493,7 +1656,7 @@ namespace another_toml
 				throw parser_error{ "Expected value"s };
 		}
 
-		auto [type, value] = get_value_type(out);
+		auto [type, value] = get_value_type<NoThrow>(out);
 		if (type == value_type::bad)
 		{
 			if constexpr (NoThrow)
@@ -1607,6 +1770,17 @@ namespace another_toml
 					else
 						throw unexpected_character{ "Invalid sequence at end of multiline string"s };
 				}
+			}
+
+			if (invalid_string_chars(ch))
+			{
+				if constexpr (NoThrow)
+				{
+					std::cerr << "Illigal control character in multiline string\n"s;
+					return {};
+				}
+				else
+					throw unexpected_character{ "Illigal control character in multiline string"s };
 			}
 
 			str.push_back(ch);
@@ -1783,6 +1957,8 @@ namespace another_toml
 				continue;
 			}
 
+			//assert(last token was array begin or comma)
+
 			//get value
 			strm.putback(ch);
 			if (!parse_value<NoThrow>(strm, toml_data))
@@ -1824,7 +2000,24 @@ namespace another_toml
 				continue;
 			}
 
-			return false;
+			if (ch == '#')
+			{
+				if (!parse_comment<NoThrow>(strm))
+				{
+					if constexpr (NoThrow)
+						return false;
+				}
+
+				continue;
+			}
+
+			if constexpr (NoThrow)
+			{
+				std::cerr << "Unrecognised array format\n"s;
+				return false;
+			}
+			else
+				throw parser_error{ "Unrecognised array format"s };
 		}
 
 		if constexpr (NoThrow)
@@ -2042,6 +2235,7 @@ namespace another_toml
 			}
 		}
 
+		strm.token_stream.emplace_back(token_type::value);
 		const auto parent_type = toml_data.tables[strm.stack.back()].type;
 		if (parent_type == node_type::key)
 			strm.stack.pop_back();
