@@ -127,12 +127,17 @@ namespace another_toml
 
 	class node_iterator;
 
+	template<bool RootNode = false>
 	class node 
 	{
 	public:
-		node(std::shared_ptr<detail::toml_internal_data> shared_data = {},
+		using data_type = std::conditional_t<RootNode,
+			std::unique_ptr<detail::toml_internal_data, detail::toml_data_deleter>,
+			const detail::toml_internal_data*>;
+
+		explicit node(data_type shared_data = data_type{},
 			detail::index_t i = detail::bad_index)
-			: _data{ shared_data }, _index{ i } {}
+			: _data{ std::move(shared_data) }, _index{ i } {}
 
 		//test if this is a valid node: calling any function other than good()
 		//								on an invalid node is undefined behaviour
@@ -158,8 +163,8 @@ namespace another_toml
 		//		for a value: none
 		//		for a key: anonymous table, value, array(of arrays of values)
 		bool has_children() const noexcept;
-		std::vector<node> get_children() const;
-		node get_child() const;
+		std::vector<node<>> get_children() const;
+		node<> get_child() const;
 
 		// iterator based interface
 		node_iterator begin() const noexcept;
@@ -175,30 +180,31 @@ namespace another_toml
 		date as_date_local() const;
 		time as_time_local() const;
 
-		//returns the root table at the base of the hierarchy
-		node get_root_table() const noexcept;
-		
 		operator bool() const noexcept
 		{
 			return good();
 		}
 
 	private:
-		mutable std::shared_ptr<detail::toml_internal_data> _data;
+		data_type _data;
 		detail::index_t _index;
 	};
+
+	using root_node = node<true>;
+	extern template class node<true>;
+	extern template class node<>;
 
 	class node_iterator
 	{
 	public:
 		using iterator_concept = std::forward_iterator_tag;
 
-		node_iterator(std::shared_ptr<detail::toml_internal_data> sh = {},
+		node_iterator(const detail::toml_internal_data* sh = {},
 			detail::index_t i = detail::bad_index)
 			: _data{ sh }, _index{ i }
 		{}
 
-		node operator*() const noexcept
+		node<> operator*() const noexcept
 		{
 			assert(_index != detail::bad_index &&
 				_data);
@@ -242,18 +248,18 @@ namespace another_toml
 		}
 
 	private:
-		std::shared_ptr<detail::toml_internal_data> _data;
+		const detail::toml_internal_data* _data;
 		detail::index_t _index;
 	};
 
 	constexpr auto no_throw = detail::no_throw_t{};
 
-	node parse(std::string_view toml);
-	node parse(std::istream&); 
+	root_node parse(std::string_view toml);
+	root_node parse(std::istream&);
 	//node parse(const std::filesystem::path& filename);
 
-	node parse(std::string_view toml, detail::no_throw_t) noexcept;
-	node parse(std::istream&, detail::no_throw_t) noexcept;
+	root_node parse(std::string_view toml, detail::no_throw_t) noexcept;
+	root_node parse(std::istream&, detail::no_throw_t) noexcept;
 	//node parse(const std::filesystem::path& filename, detail::no_throw_t) noexcept;
 
 	struct writer_options
@@ -338,7 +344,7 @@ namespace std
 	struct iterator_traits<another_toml::node_iterator>
 	{
 		using difference_type = std::ptrdiff_t;
-		using value_type = another_toml::node;
+		using value_type = another_toml::node<>;
 		using pointer = value_type*;
 		using reference = const value_type&;
 		using iterator_category = std::forward_iterator_tag;

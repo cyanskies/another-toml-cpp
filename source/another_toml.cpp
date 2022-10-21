@@ -97,85 +97,114 @@ namespace another_toml
 		return bad_index;
 	}
 
-	bool node::good() const noexcept
+	template<bool R>
+	bool node<R>::good() const noexcept
 	{
 		return _data && (_index != bad_index ||
 			node_type::bad_type == _data->tables[_index].type);
 	}
 
 	// test node type
-	bool node::table() const noexcept
+	template<bool R>
+	bool node<R>::table() const noexcept
 	{
 		return node_type::table == _data->tables[_index].type;
 	}
 
-	bool node::array() const noexcept
+	template<bool R>
+	bool node<R>::array() const noexcept
 	{
 		return node_type::array == _data->tables[_index].type;
 	}
 
-	bool node::array_table() const noexcept
+	template<bool R>
+	bool node<R>::array_table() const noexcept
 	{
 		return node_type::array_tables == _data->tables[_index].type;
 	}
 
-	bool node::key() const noexcept
+	template<bool R>
+	bool node<R>::key() const noexcept
 	{
 		return node_type::key == _data->tables[_index].type;
 	}
 
-	bool node::value() const noexcept
+	template<bool R>
+	bool node<R>::value() const noexcept
 	{
 		return node_type::value == _data->tables[_index].type;
 	}
 
-	bool node::inline_table() const noexcept
+	template<bool R>
+	bool node<R>::inline_table() const noexcept
 	{
 		return node_type::inline_table == _data->tables[_index].type;
 	}
 
-	value_type node::type() const noexcept
+	template<bool R>
+	value_type node<R>::type() const noexcept
 	{
 		return _data->tables[_index].v_type;
 	}
 
-	bool node::has_children() const noexcept
+	template<bool R>
+	bool node<R>::has_children() const noexcept
 	{
 		return _data->tables[_index].child != bad_index;
 	}
 
-	std::vector<node> node::get_children() const
+	template<bool R>
+	std::vector<node<>> node<R>::get_children() const
 	{
-		auto out = std::vector<node>{};
+		auto out = std::vector<node<>>{};
 		auto child = _data->tables[_index].child;
 		while (child != bad_index)
 		{
-			out.emplace_back(node{ _data, child });
+			if constexpr (R)
+				out.emplace_back(node<>{ _data.get(), child });
+			else	
+				out.emplace_back(node<>{ _data, child });
+
 			child = _data->tables[child].next;
 		}
 		return out;
 	}
 
-	node node::get_child() const
+	template<>
+	node<> node<true>::get_child() const
 	{
-		return { _data, _data->tables[_index].child };
+		return node<>{ _data.get(), _data->tables[_index].child};
 	}
 
-	node_iterator node::begin() const noexcept
+	template<>
+	node<> node<>::get_child() const
+	{
+		return node<>{ _data, _data->tables[_index].child};
+	}
+
+	template<bool R>
+	node_iterator node<R>::begin() const noexcept
 	{
 		const auto child = _data->tables[_index].child;
 		if (child != bad_index)
-			return node_iterator{ _data, child };
+		{
+			if constexpr (R)
+				return node_iterator{ _data.get(), child};
+			else
+				return node_iterator{ _data, child };
+		}
 		else
 			return end();
 	}
 
-	node_iterator node::end() const noexcept
+	template<bool R>
+	node_iterator node<R>::end() const noexcept
 	{
 		return node_iterator{};
 	}
 
-	std::size_t node::size() const noexcept
+	template<bool R>
+	std::size_t node<R>::size() const noexcept
 	{
 		auto size = std::size_t{};
 		auto child = _data->tables[_index].child;
@@ -187,12 +216,14 @@ namespace another_toml
 		return size;
 	}
 
-	const std::string& node::as_string() const noexcept
+	template<bool R>
+	const std::string& node<R>::as_string() const noexcept
 	{
 		return _data->tables[_index].name;
 	}
 
-	std::int64_t node::as_int() const
+	template<bool R>
+	std::int64_t node<R>::as_int() const
 	{
 		try
 		{
@@ -204,7 +235,8 @@ namespace another_toml
 		}
 	}
 
-	double node::as_floating() const
+	template<bool R>
+	double node<R>::as_floating() const
 	{
 		try
 		{
@@ -216,7 +248,8 @@ namespace another_toml
 		}
 	}
 
-	bool node::as_boolean() const
+	template<bool R>
+	bool node<R>::as_boolean() const
 	{
 		try
 		{
@@ -228,7 +261,8 @@ namespace another_toml
 		}
 	}
 
-	date_time node::as_date_time() const
+	template<bool R>
+	date_time node<R>::as_date_time() const
 	{
 		try
 		{
@@ -240,7 +274,8 @@ namespace another_toml
 		}
 	}
 
-	local_date_time node::as_date_time_local() const
+	template<bool R>
+	local_date_time node<R>::as_date_time_local() const
 	{
 		try 
 		{
@@ -252,7 +287,8 @@ namespace another_toml
 		}
 	}
 
-	date node::as_date_local() const
+	template<bool R>
+	date node<R>::as_date_local() const
 	{
 		try
 		{
@@ -264,7 +300,8 @@ namespace another_toml
 		}
 	}
 
-	time node::as_time_local() const
+	template<bool R>
+	time node<R>::as_time_local() const
 	{
 		try
 		{
@@ -276,10 +313,8 @@ namespace another_toml
 		}
 	}
 
-	node node::get_root_table() const noexcept
-	{
-		return node{ _data, {} };
-	}
+	template class node<true>;
+	template class node<false>;
 
 	void insert_bad(detail::toml_internal_data& d)
 	{
@@ -396,6 +431,7 @@ namespace another_toml
 		{
 			col = {};
 			++line;
+			//token_stream.emplace_back(token_type::newline);
 			return;
 		}
 
@@ -570,7 +606,6 @@ namespace another_toml
 					if (parent == bad_index)
 						return parent;
 				}
-				node = &d.tables[parent];
 			}
 		}
 		else
@@ -584,16 +619,22 @@ namespace another_toml
 				if (parent == bad_index)
 					return parent;
 			}
-			node = &d.tables[parent];
 		}
 
+		auto& node = d.tables[parent];
+		assert(node.type == node_type::array_tables);
+
+		// insert array member
+		auto ret = insert_child_table<NoThrow>(parent, {}, d, table_def::header);		
 		if constexpr (NoThrow)
 		{
-			insert_bad(d);
-			return bad_index;
+			if (ret == bad_index)
+			{
+				insert_bad(d);
+				return bad_index;
+			}
 		}
-		else
-			throw parser_error{ "Error creating array of tables"s };
+		return ret;
 	}
 
 	template<bool NoThrow>
@@ -628,7 +669,6 @@ namespace another_toml
 			else
 				throw parser_error{ "Invalid utf-8 chars"s };
 		}
-
 		return u8;
 	}
 
@@ -656,10 +696,9 @@ namespace another_toml
 			{
 				if (escape_codes_raw[i] == std::string_view{ &s[code_beg], &s[code_end] })
 				{
-					s.replace(code_beg, code_beg + 2,
-						1, escape_codes_char[i]);
+					s.replace(code_beg, 2, 1, escape_codes_char[i]);
 					found_code = true;
-					pos = code_beg + 1;
+					pos = code_beg;
 					break;
 				}
 			}
@@ -715,7 +754,7 @@ namespace another_toml
 
 					assert(u8);
 					s.replace(code_beg, code_end - code_beg, *u8);
-					pos += size(*u8);
+					pos = code_beg + size(*u8);
 					continue;
 				}
 
@@ -733,6 +772,7 @@ namespace another_toml
 
 		return true;
 	}
+
 	constexpr bool is_unicode_start(char c) noexcept
 	{
 		return c & 0b11000000;
@@ -1401,25 +1441,25 @@ namespace another_toml
 	}
 
 	template<bool NoThrow>
-	static std::pair<value_type, variant_t> get_value_type(std::string_view str) noexcept(NoThrow)
+	static std::tuple<value_type, variant_t, std::string> get_value_type(std::string_view str) noexcept(NoThrow)
 	{
 		if (empty(str))
-			return { value_type::bad, {} };
+			return { value_type::bad, {}, {} };
 
 		//keywords
 		//	true, false
 		if (str == "true"sv)
-			return { value_type::boolean, true };
+			return { value_type::boolean, true, std::string{ str } };
 		if (str == "false"sv)
-			return { value_type::boolean, false };
+			return { value_type::boolean, false, std::string{ str } };
 		//	inf, +inf, -inf
 		if (str == "inf"sv || str == "+inf"sv)
-			return { value_type::floating_point, std::numeric_limits<double>::infinity() };
+			return { value_type::floating_point, std::numeric_limits<double>::infinity(), std::string{ str } };
 		if (str == "-inf"sv)
-			return { value_type::floating_point, -std::numeric_limits<double>::infinity()};
+			return { value_type::floating_point, -std::numeric_limits<double>::infinity(), std::string{ str } };
 		//	nan, +nan, -nan
 		if(str == "nan"sv || str == "+nan"sv || str == "-nan"sv)
-			return { value_type::floating_point, std::numeric_limits<double>::quiet_NaN() };
+			return { value_type::floating_point, std::numeric_limits<double>::quiet_NaN(), "nan"s };
 		
 		const auto beg = begin(str);
 		const auto end = std::end(str);
@@ -1444,7 +1484,7 @@ namespace another_toml
 		//	-oct
 		// doesn't check for min/max value
 		constexpr auto int_reg =
-			R"(^[\+\-]?[1-9]+(_?([\d])+)*$|^0x[\dA-Fa-f]+(_?[\dA-Fa-f]+)+|0b[01]+(_?[01]+)+|0o[0-7]+(_?([0-7])+)*|^[\+\-]?0$)";
+			R"(^[\+\-]?[1-9]+(_?([\d])+)*$|^0x[\dA-Fa-f]+(_?[\dA-Fa-f]+)*|0b[01]+(_?[01]+)*|0o[0-7]+(_?([0-7])+)*|^[\+\-]?0$)";
 
 		if (std::regex_match(beg, end, std::regex{ int_reg }))
 		{
@@ -1471,15 +1511,18 @@ namespace another_toml
 			auto ret = std::from_chars(&string[0], string_end, int_val, base);
 
 			if (ret.ptr == string_end)
-				return { value_type::integer, {int_val} };
+			{
+				//str = std::to_string(int_val);
+				return { value_type::integer, {int_val}, std::to_string(int_val)};
+			}
 			else if(ret.ec == std::errc::invalid_argument)
-				return { value_type::bad, {} };
+				return { value_type::bad, {}, {} };
 			else if (ret.ec == std::errc::result_out_of_range)
-				return { value_type::out_of_range, {} };
+				return { value_type::out_of_range, {}, {} };
 		}
 		
 		//floating point(double)
-		constexpr auto float_reg = R"(^[\+\-]?([1-9]+(_([\d])+)*|0)(\.[\d]+(_[\d])*)?([eE][\+\-]?[\d]+(_[\d]+)?)?$)";
+		constexpr auto float_reg = R"(^[\+\-]?([1-9]+(_?([\d])+)*|0)(\.[\d]+(_?[\d])*)?([eE][\+\-]?[\d]+(_?[\d]+)?)?$)";
 		if (std::regex_match(beg, end, std::regex{ float_reg }))
 		{
 			const auto string = std::invoke(remove_underscores, str);
@@ -1487,15 +1530,15 @@ namespace another_toml
 			const auto string_end = &string[0] + size(string);
 			const auto ret = std::from_chars(&string[0], string_end, floating_val);
 			if (ret.ptr == string_end)
-				return { value_type::floating_point, {floating_val} };
+				return { value_type::floating_point, {floating_val}, string };
 			else if (ret.ec == std::errc::invalid_argument)
-				return { value_type::bad, {} };
+				return { value_type::bad, {}, {} };
 			else if (ret.ec == std::errc::result_out_of_range)
-				return { value_type::out_of_range, {} };
+				return { value_type::out_of_range, {}, {} };
 		}
 
 		constexpr auto date_time_reg =
-			R"(^((\d{4})-(\d{2})-(\d{2}))?([T t])?((\d{2}):(\d{2}):(\d{2})(\.\d+)?)?(([zZ])|(([\+\-])(\d{2}):(\d{2})))?)";
+			R"(^((\d{4})-(\d{2})-(\d{2}))?([Tt ])?((\d{2}):(\d{2}):(\d{2})(\.\d+)?)?(([zZ])|(([\+\-])(\d{2}):(\d{2})))?)";
 		if (auto matches = std::match_results<std::string_view::iterator>{};
 			std::regex_match(beg, end, matches, std::regex{ date_time_reg }))
 		{
@@ -1537,7 +1580,7 @@ namespace another_toml
 						odt.offset_hours = {};
 						odt.offset_minutes = {};
 						odt.offset_positive = true;
-						return { value_type::date_time, odt };
+						return { value_type::date_time, odt, std::string{ str } };
 					}
 
 					const auto& off_sign = matches[static_cast<std::size_t>(match_index::off_sign)];
@@ -1545,7 +1588,7 @@ namespace another_toml
 					if (*off_sign.first == '+')
 						odt.offset_positive = true;
 					else if (*off_sign.first != '-')
-						return { value_type::bad, {} };
+						return { value_type::bad, {}, {} };
 
 					const auto& hours = matches[static_cast<std::size_t>(match_index::off_hours)];
 					assert(hours.matched);
@@ -1556,7 +1599,7 @@ namespace another_toml
 						assert(minutes.matched);
 						ret = std::from_chars(&*minutes.first, &*minutes.first + minutes.length(), odt.offset_minutes);
 						if (ret.ptr == &*minutes.first + minutes.length())
-							return { value_type::date_time, odt };
+							return { value_type::date_time, odt, std::string{ str } };
 					}
 				}
 			}
@@ -1564,27 +1607,31 @@ namespace another_toml
 			{
 				auto dt = fill_date_time<NoThrow>(matches);
 				if (dt)
-					return { value_type::local_date_time, *dt };
+					return { value_type::local_date_time, *dt, std::string{ str } };
 			}
 			else if (local_date)
 			{
 				auto d = fill_date<NoThrow>(matches);
 				if (d)
-					return { value_type::local_date, *d };
+					return { value_type::local_date, *d, std::string{ str } };
 			}
 			else if (local_time)
 			{
 				auto t = fill_time<NoThrow>(matches);
 				if (t)
-					return { value_type::local_time, *t };
+					return { value_type::local_time, *t, std::string{ str } };
 			}
 		}
 
-		return { value_type::bad, {} };
+		return { value_type::bad, {}, {} };
 	}
 
+	struct normal_tag_t {};
+	struct array_tag_t {};
+	struct inline_tag_t {};
+
 	// for parsing keywords, dates or numerical values
-	template<bool NoThrow>
+	template<bool NoThrow, typename Tag>
 	static bool parse_unquoted_value(parser_state& strm, detail::toml_internal_data& toml_data)
 	{
 		auto out = std::string{};
@@ -1592,7 +1639,10 @@ namespace another_toml
 		auto eof = bool{};
 		const auto parent = strm.stack.back();
 		const auto parent_type = toml_data.tables[parent].type;
-		const auto array_elm = parent_type == node_type::array;
+		constexpr auto array = std::is_same_v<Tag, array_tag_t>;
+		constexpr auto inline_table = std::is_same_v<Tag, inline_tag_t>;
+		assert((parent_type == node_type::array) == array);
+
 		while (strm.strm.good())
 		{
 			std::tie(ch, eof) = strm.get_char<NoThrow>();
@@ -1602,11 +1652,11 @@ namespace another_toml
 					break;
 			}
 
-			if (ch == ' ')
+			/*if (ch == ' ')
 			{
 				strm.putback(ch);
 				break;
-			}
+			}*/
 
 			if (ch == '#')
 			{
@@ -1614,23 +1664,49 @@ namespace another_toml
 				break;
 			}
 
-			if (array_elm)
+			if constexpr (array || inline_table)
 			{
-				if (ch == ',' || ch == ']')
+				if (ch == ',')
 				{
 					strm.putback(ch);
 					break;
+				}
+
+				if constexpr (inline_table)
+				{
+					if (ch == '}')
+					{
+						strm.putback(ch);
+						break;
+					}
+				}
+
+				if constexpr (array)
+				{
+					if (ch == ']')
+					{
+						strm.putback(ch);
+						break;
+					}
 				}
 
 				if (newline(strm, ch))
 				{
 					if constexpr (NoThrow)
 					{
-						std::cerr << "Unexpected newline in array element\n"s;
+						if constexpr (array)
+							std::cerr << "Unexpected newline in array element\n"s;
+						else
+							std::cerr << "Unexpected newline in inline table value\n"s;
 						return false;
 					}
 					else
-						throw parser_error{ "Unexpected newline in array element"s };
+					{
+						if constexpr(array)
+							throw parser_error{ "Unexpected newline in array element"s };
+						else
+							throw parser_error{ "Unexpected newline in inline table value"s };
+					}
 				}
 			}
 			else if (newline(strm, ch))
@@ -1656,7 +1732,7 @@ namespace another_toml
 				throw parser_error{ "Expected value"s };
 		}
 
-		auto [type, value] = get_value_type<NoThrow>(out);
+		auto [type, value, string] = get_value_type<NoThrow>(out);
 		if (type == value_type::bad)
 		{
 			if constexpr (NoThrow)
@@ -1682,7 +1758,7 @@ namespace another_toml
 		strm.token_stream.push_back(token_type::value);
 		return insert_child<NoThrow>(toml_data, parent, 
 			internal_node{
-				std::move(out), node_type::value,
+				std::move(string), node_type::value,
 				type, std::move(value)
 			}) != bad_index;
 	}
@@ -1717,46 +1793,82 @@ namespace another_toml
 					return {};
 			}
 
+			// implements '\' behaviour for double quoted strings
+			if constexpr (DoubleQuote)
+			{
+				if(ch == '\\')
+				{
+					auto peek = strm.strm.peek();
+					if (peek == '\\')
+					{
+						strm.ignore();
+						str += "\\\\"s;
+						continue;
+					}
+
+					if (peek == '\n' ||
+						peek == ' ' ||
+						peek == '\t')
+					{
+						const auto line = strm.line;
+						while (strm.strm.good())
+						{
+							std::tie(ch, eof) = strm.get_char<NoThrow>();
+							if constexpr (NoThrow)
+							{
+								if (eof)
+									return {};
+							}
+
+							if (whitespace(ch, strm))
+							{
+								; // do nothing
+							}
+							else if (newline(strm, ch))
+								strm.nextline();
+							else
+							{
+								strm.putback(ch);
+								break;
+							}
+						}
+
+						if (line == strm.line)
+						{
+							if constexpr (NoThrow)
+							{
+								std::cerr << "Illigal character following '\\' line break\n"s;
+								return {};
+							}
+							else
+								throw unexpected_character{ "Illigal character following '\\' line break"s };
+						}
+
+						continue;
+					}
+				} // ! '\'
+			} // !doublequote
+
 			if (size(str) > 2)
 			{
 				auto rb = rbegin(str);
 				const auto re = rend(str);
 				while (rb != re && *rb == quote_char)
-					++rb;
+				{
+					if constexpr (DoubleQuote)
+					{
+						auto next = std::next(rb);
+						if (next != re && *next == '\\')
+							break;
+					}
 
-				//
+					++rb;
+				}
+
 				const auto dist = distance(rbegin(str), rb) + (ch == quote_char ? 1 : 0);
 				const auto end = dist > 2 && dist < 6;
 				if (end && ch != quote_char)
 				{
-					// implements '\' behaviour for double quoted strings
-					//if constexpr (DoubleQuote)
-					//{
-					//	const auto last = str.find_last_of('\\');
-					//	if (last != std::string::npos)
-					//	{
-					//		auto prev = last;
-					//		auto count = 1;
-					//		while (prev > 0 && str[--prev] == '\\')
-					//			++count;
-
-					//		if (count % 2 != 0)
-					//		{
-					//			str.erase(last, size(str) - last);
-
-					//			std::tie(ch, eof) = strm.get_char<NoThrow>();
-					//			if constexpr (NoThrow)
-					//			{
-					//				if (eof)
-					//					return {};
-					//			}
-
-					//			if (whitespace(ch, strm))
-					//				continue;
-					//		}
-					//	}
-					//} // !doublequote
-
 					strm.putback(ch);
 					return std::string{ begin(str), next(begin(str), size(str) - 3) };
 				}
@@ -1772,7 +1884,7 @@ namespace another_toml
 				}
 			}
 
-			if (invalid_string_chars(ch))
+			if (invalid_string_chars(ch) && ch != '\n')
 			{
 				if constexpr (NoThrow)
 				{
@@ -1864,6 +1976,7 @@ namespace another_toml
 	template<bool NoThrow>
 	static bool parse_comment(parser_state& strm) noexcept(NoThrow)
 	{
+		//strm.token_stream.emplace_back(token_type::comment)
 		while (strm.strm.good())
 		{
 			auto [ch, eof] = strm.get_char<true>();
@@ -1907,7 +2020,7 @@ namespace another_toml
 		return true;
 	}
 
-	template<bool NoThrow>
+	template<bool NoThrow, typename Tag>
 	static bool parse_value(parser_state&, detail::toml_internal_data&);
 
 	template<bool NoThrow>
@@ -1945,61 +2058,14 @@ namespace another_toml
 				strm.stack.pop_back();
 				return true;
 			}
-
-			if (ch == '#')
-			{
-				if (!parse_comment<NoThrow>(strm))
-				{
-					if constexpr (NoThrow)
-						return false;
-				}
-
-				continue;
-			}
-
-			//assert(last token was array begin or comma)
-
-			//get value
-			strm.putback(ch);
-			if (!parse_value<NoThrow>(strm, toml_data))
-				return false;
-		
-			std::tie(ch, eof) = strm.get_char<NoThrow>();
-			if constexpr (NoThrow)
-			{
-				if (eof)
-					return false;
-			}
-
-			if (whitespace(ch, strm))
-			{
-				std::tie(ch, eof) = strm.get_char<NoThrow>();
-				if constexpr (NoThrow)
-				{
-					if (eof)
-						return false;
-				}
-			}
-
+			
 			if (ch == ',')
 			{
+				assert(strm.token_stream.back() == token_type::value);
 				strm.token_stream.emplace_back(token_type::comma);
 				continue;
 			}
 
-			if (ch == ']')
-			{
-				strm.token_stream.emplace_back(token_type::array_end);
-				strm.stack.pop_back(); 
-				return true;
-			}
-
-			if (newline(strm, ch))
-			{
-				strm.nextline();
-				continue;
-			}
-
 			if (ch == '#')
 			{
 				if (!parse_comment<NoThrow>(strm))
@@ -2011,13 +2077,12 @@ namespace another_toml
 				continue;
 			}
 
-			if constexpr (NoThrow)
-			{
-				std::cerr << "Unrecognised array format\n"s;
+			//get value
+			strm.putback(ch);
+			if (!parse_value<NoThrow, array_tag_t>(strm, toml_data))
 				return false;
-			}
-			else
-				throw parser_error{ "Unrecognised array format"s };
+			
+			continue;
 		}
 
 		if constexpr (NoThrow)
@@ -2039,6 +2104,7 @@ namespace another_toml
 		assert(p.type == node_type::key || p.type == node_type::array);
 		const auto table = insert_child<NoThrow>(toml_data, parent, internal_node{ {}, node_type::inline_table });
 		strm.stack.emplace_back(table);
+		strm.token_stream.emplace_back(token_type::inline_table);
 		while (strm.strm.good())
 		{
 			auto [ch, eof] = strm.get_char<NoThrow>();
@@ -2082,8 +2148,21 @@ namespace another_toml
 				return true;
 			}
 
+			if (const auto back = strm.token_stream.back();
+				!(back == token_type::inline_table || back == token_type::comma))
+			{
+				if constexpr (NoThrow)
+				{
+					std::cerr << "Values must be seperated by commas in inline tables\n"s;
+					insert_bad(toml_data);
+					return false;
+				}
+				else
+					throw unexpected_character{ "Values must be seperated by commas in inline tables"s };
+			}
+
 			strm.putback(ch);
-			if (!parse_key_value<NoThrow>(strm, toml_data))
+			if (!parse_key_value<NoThrow, inline_tag_t>(strm, toml_data))
 				return false;
 
 			std::tie(ch, eof) = strm.get_char<NoThrow>();
@@ -2115,9 +2194,10 @@ namespace another_toml
 		return true;
 	}
 
-	template<bool NoThrow>
+	template<bool NoThrow, typename Tag>
 	static bool parse_key_value(parser_state& strm, toml_internal_data& toml_data)
 	{
+		static_assert(std::is_same_v<Tag, normal_tag_t> || std::is_same_v<Tag, inline_tag_t>);
 		auto key_str = parse_key_name<NoThrow>(strm, toml_data);
 
 		if constexpr (NoThrow)
@@ -2146,9 +2226,15 @@ namespace another_toml
 			strm.open_tables.emplace_back(key_str.parent);
 
 		const auto key_index = insert_child_key<NoThrow>(key_str.parent, std::move(*key_str.name), toml_data);
+		
+		if constexpr (NoThrow)
+		{
+			if (key_index == bad_index)
+				return false;
+		}
+		
 		strm.stack.emplace_back(key_index);
 		strm.token_stream.emplace_back(token_type::key);
-
 		
 		if (whitespace(ch, strm))
 			std::tie(ch, eof) = strm.get_char<NoThrow>();
@@ -2190,7 +2276,7 @@ namespace another_toml
 		if (!whitespace(ch, strm))
 			strm.putback(ch);
 
-		const auto ret = parse_value<NoThrow>(strm, toml_data);
+		const auto ret = parse_value<NoThrow, Tag>(strm, toml_data);
 		if constexpr (NoThrow)
 		{
 			if (!ret)
@@ -2203,7 +2289,7 @@ namespace another_toml
 		return true;
 	}
 
-	template<bool NoThrow>
+	template<bool NoThrow, typename Tag>
 	static bool parse_value(parser_state& strm, detail::toml_internal_data& toml_data)
 	{
 		//whitespace has already been consumed before here
@@ -2227,7 +2313,7 @@ namespace another_toml
 		else
 		{
 			strm.putback(ch);
-			ret = parse_unquoted_value<NoThrow>(strm, toml_data);
+			ret = parse_unquoted_value<NoThrow, Tag>(strm, toml_data);
 			if constexpr (NoThrow)
 			{
 				if (!ret)
@@ -2287,6 +2373,13 @@ namespace another_toml
 
 		if constexpr (Array)
 		{
+			std::tie(ch, eof) = strm.get_char<NoThrow>();
+			if constexpr (NoThrow)
+			{
+				if (eof)
+					return bad_index;
+			}
+
 			if (ch != ']')
 			{
 				if constexpr (NoThrow)
@@ -2303,13 +2396,16 @@ namespace another_toml
 		if (const auto table = find_table(*name.name, name.parent, toml_data);
 			table != bad_index && toml_data.tables[table].closed == true)
 		{
-			if constexpr (NoThrow)
+			if constexpr (!Array)
 			{
-				std::cerr << "This table: " << *name.name << "; has already been defined\n";
-				return bad_index;
+				if constexpr (NoThrow)
+				{
+					std::cerr << "This table: " << *name.name << "; has already been defined\n";
+					return bad_index;
+				}
+				else
+					throw parser_error{ "table redefinition" };
 			}
-			else
-				throw parser_error{ "table redefinition" };
 		}
 
 		if (!name.name)
@@ -2390,9 +2486,9 @@ namespace another_toml
 	}
 
 	template<bool NoThrow>
-	static node parse_toml(std::istream& strm)
+	static root_node parse_toml(std::istream& strm)
 	{
-		auto toml_data = std::make_shared<detail::toml_internal_data>();
+		auto toml_data = root_node::data_type{ new detail::toml_internal_data };
 		auto& t = toml_data->tables;
 		auto p_state = parser_state{ strm };
 
@@ -2475,7 +2571,7 @@ namespace another_toml
 			}
 
 			p_state.putback(ch);
-			if (parse_key_value<NoThrow>(p_state, *toml_data))
+			if (parse_key_value<NoThrow, normal_tag_t>(p_state, *toml_data))
 			{
 				std::tie(ch, eof) = p_state.get_char<true>();
 				if (eof)
@@ -2521,26 +2617,28 @@ namespace another_toml
 		}
 
 		if (toml_data->tables.back().type == node_type::bad_type)
-			return {};
+			return root_node{};
+
+
 
 #ifndef NDEBUG
 		toml_data->input_log = std::move(p_state.toml_file);
 #endif
 
-		return { std::move(toml_data), {} };
+		return root_node{ std::move(toml_data), {} };
 	}
 
 	template<bool NoThrow>
-	node parse(std::istream& strm)
+	root_node parse(std::istream& strm)
 	{
 		if (!strm.good())
-			return {};
+			return root_node{};
 
 		return parse_toml<NoThrow>(strm);
 	}
 
 	template<bool NoThrow>
-	node parse(std::string_view toml)
+	root_node parse(std::string_view toml)
 	{
 		auto strstream = std::stringstream{ std::string{ toml }, std::ios_base::in };
 		return parse<NoThrow>(strstream);
@@ -2559,12 +2657,12 @@ namespace another_toml
 		return parse<NoThrow>(strm);
 	}*/
 
-	node parse(std::string_view toml)
+	root_node parse(std::string_view toml)
 	{
 		return parse<false>(toml);
 	}
 
-	node parse(std::istream& strm)
+	root_node parse(std::istream& strm)
 	{
 		return parse<false>(strm);
 	}
@@ -2574,12 +2672,12 @@ namespace another_toml
 		return parse<false>(path);
 	}*/
 
-	node parse(std::string_view toml, detail::no_throw_t) noexcept
+	root_node parse(std::string_view toml, detail::no_throw_t) noexcept
 	{
 		return parse<true>(toml);
 	}
 
-	node parse(std::istream& strm, detail::no_throw_t) noexcept
+	root_node parse(std::istream& strm, detail::no_throw_t) noexcept
 	{
 		return parse<true>(strm);
 	}
