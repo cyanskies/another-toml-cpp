@@ -98,7 +98,7 @@ namespace another_toml
 	}
 
 	template<bool R>
-	bool node<R>::good() const noexcept
+	bool basic_node<R>::good() const noexcept
 	{
 		return _data && (_index != bad_index ||
 			node_type::bad_type == _data->tables[_index].type);
@@ -106,64 +106,64 @@ namespace another_toml
 
 	// test node type
 	template<bool R>
-	bool node<R>::table() const noexcept
+	bool basic_node<R>::table() const noexcept
 	{
 		return node_type::table == _data->tables[_index].type;
 	}
 
 	template<bool R>
-	bool node<R>::array() const noexcept
+	bool basic_node<R>::array() const noexcept
 	{
 		return node_type::array == _data->tables[_index].type;
 	}
 
 	template<bool R>
-	bool node<R>::array_table() const noexcept
+	bool basic_node<R>::array_table() const noexcept
 	{
 		return node_type::array_tables == _data->tables[_index].type;
 	}
 
 	template<bool R>
-	bool node<R>::key() const noexcept
+	bool basic_node<R>::key() const noexcept
 	{
 		return node_type::key == _data->tables[_index].type;
 	}
 
 	template<bool R>
-	bool node<R>::value() const noexcept
+	bool basic_node<R>::value() const noexcept
 	{
 		return node_type::value == _data->tables[_index].type;
 	}
 
 	template<bool R>
-	bool node<R>::inline_table() const noexcept
+	bool basic_node<R>::inline_table() const noexcept
 	{
 		return node_type::inline_table == _data->tables[_index].type;
 	}
 
 	template<bool R>
-	value_type node<R>::type() const noexcept
+	value_type basic_node<R>::type() const noexcept
 	{
 		return _data->tables[_index].v_type;
 	}
 
 	template<bool R>
-	bool node<R>::has_children() const noexcept
+	bool basic_node<R>::has_children() const noexcept
 	{
 		return _data->tables[_index].child != bad_index;
 	}
 
 	template<bool R>
-	std::vector<node<>> node<R>::get_children() const
+	std::vector<basic_node<>> basic_node<R>::get_children() const
 	{
-		auto out = std::vector<node<>>{};
+		auto out = std::vector<basic_node<>>{};
 		auto child = _data->tables[_index].child;
 		while (child != bad_index)
 		{
 			if constexpr (R)
-				out.emplace_back(node<>{ _data.get(), child });
+				out.emplace_back(basic_node<>{ _data.get(), child });
 			else	
-				out.emplace_back(node<>{ _data, child });
+				out.emplace_back(basic_node<>{ _data, child });
 
 			child = _data->tables[child].next;
 		}
@@ -171,19 +171,19 @@ namespace another_toml
 	}
 
 	template<>
-	node<> node<true>::get_child() const
+	basic_node<> basic_node<true>::get_child() const
 	{
-		return node<>{ _data.get(), _data->tables[_index].child};
+		return basic_node<>{ _data.get(), _data->tables[_index].child};
 	}
 
 	template<>
-	node<> node<>::get_child() const
+	basic_node<> basic_node<>::get_child() const
 	{
-		return node<>{ _data, _data->tables[_index].child};
+		return basic_node<>{ _data, _data->tables[_index].child};
 	}
 
 	template<bool R>
-	node_iterator node<R>::begin() const noexcept
+	node_iterator basic_node<R>::begin() const noexcept
 	{
 		const auto child = _data->tables[_index].child;
 		if (child != bad_index)
@@ -198,13 +198,13 @@ namespace another_toml
 	}
 
 	template<bool R>
-	node_iterator node<R>::end() const noexcept
+	node_iterator basic_node<R>::end() const noexcept
 	{
 		return node_iterator{};
 	}
 
 	template<bool R>
-	std::size_t node<R>::size() const noexcept
+	std::size_t basic_node<R>::size() const noexcept
 	{
 		auto size = std::size_t{};
 		auto child = _data->tables[_index].child;
@@ -217,13 +217,13 @@ namespace another_toml
 	}
 
 	template<bool R>
-	const std::string& node<R>::as_string() const noexcept
+	const std::string& basic_node<R>::as_string() const noexcept
 	{
 		return _data->tables[_index].name;
 	}
 
 	template<bool R>
-	std::int64_t node<R>::as_int() const
+	std::int64_t basic_node<R>::as_int() const
 	{
 		try
 		{
@@ -236,7 +236,7 @@ namespace another_toml
 	}
 
 	template<bool R>
-	double node<R>::as_floating() const
+	double basic_node<R>::as_floating() const
 	{
 		try
 		{
@@ -249,7 +249,7 @@ namespace another_toml
 	}
 
 	template<bool R>
-	bool node<R>::as_boolean() const
+	bool basic_node<R>::as_boolean() const
 	{
 		try
 		{
@@ -262,7 +262,7 @@ namespace another_toml
 	}
 
 	template<bool R>
-	date_time node<R>::as_date_time() const
+	date_time basic_node<R>::as_date_time() const
 	{
 		try
 		{
@@ -275,7 +275,7 @@ namespace another_toml
 	}
 
 	template<bool R>
-	local_date_time node<R>::as_date_time_local() const
+	local_date_time basic_node<R>::as_date_time_local() const
 	{
 		try 
 		{
@@ -288,7 +288,7 @@ namespace another_toml
 	}
 
 	template<bool R>
-	date node<R>::as_date_local() const
+	date basic_node<R>::as_date_local() const
 	{
 		try
 		{
@@ -301,7 +301,7 @@ namespace another_toml
 	}
 
 	template<bool R>
-	time node<R>::as_time_local() const
+	time basic_node<R>::as_time_local() const
 	{
 		try
 		{
@@ -313,8 +313,8 @@ namespace another_toml
 		}
 	}
 
-	template class node<true>;
-	template class node<false>;
+	template class basic_node<true>;
+	template class basic_node<false>;
 
 	void insert_bad(detail::toml_internal_data& d)
 	{

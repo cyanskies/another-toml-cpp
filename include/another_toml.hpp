@@ -128,14 +128,14 @@ namespace another_toml
 	class node_iterator;
 
 	template<bool RootNode = false>
-	class node 
+	class basic_node 
 	{
 	public:
 		using data_type = std::conditional_t<RootNode,
 			std::unique_ptr<detail::toml_internal_data, detail::toml_data_deleter>,
 			const detail::toml_internal_data*>;
 
-		explicit node(data_type shared_data = data_type{},
+		explicit basic_node(data_type shared_data = data_type{},
 			detail::index_t i = detail::bad_index)
 			: _data{ std::move(shared_data) }, _index{ i } {}
 
@@ -163,8 +163,8 @@ namespace another_toml
 		//		for a value: none
 		//		for a key: anonymous table, value, array(of arrays of values)
 		bool has_children() const noexcept;
-		std::vector<node<>> get_children() const;
-		node<> get_child() const;
+		std::vector<basic_node<>> get_children() const;
+		basic_node<> get_child() const;
 
 		// iterator based interface
 		node_iterator begin() const noexcept;
@@ -190,9 +190,10 @@ namespace another_toml
 		detail::index_t _index;
 	};
 
-	using root_node = node<true>;
-	extern template class node<true>;
-	extern template class node<>;
+	using root_node = basic_node<true>;
+	using node = basic_node<>;
+	extern template class basic_node<true>;
+	extern template class basic_node<>;
 
 	class node_iterator
 	{
@@ -204,11 +205,11 @@ namespace another_toml
 			: _data{ sh }, _index{ i }
 		{}
 
-		node<> operator*() const noexcept
+		node operator*() const noexcept
 		{
 			assert(_index != detail::bad_index &&
 				_data);
-			return node{ _data, _index };
+			return basic_node{ _data, _index };
 		}
 
 		node_iterator& operator++() noexcept
@@ -344,13 +345,11 @@ namespace std
 	struct iterator_traits<another_toml::node_iterator>
 	{
 		using difference_type = std::ptrdiff_t;
-		using value_type = another_toml::node<>;
+		using value_type = another_toml::basic_node<>;
 		using pointer = value_type*;
 		using reference = const value_type&;
 		using iterator_category = std::forward_iterator_tag;
 	};
 }
-
-#include "another_toml.inl"
 
 #endif // !ANOTHER_TOML_HPP
