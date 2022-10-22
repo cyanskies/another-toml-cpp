@@ -653,6 +653,7 @@ namespace another_toml
 	};
 
 	const auto unicode_bad_conversion = "conversion_error"s;
+	const auto unicode32_bad_conversion = U"conversion_error"s;
 
 	template<bool NoThrow>
 	static std::optional<std::string> to_unicode_str(char32_t ch)
@@ -671,6 +672,95 @@ namespace another_toml
 		}
 		return u8;
 	}
+
+	template<bool NoThrow, bool EscapeAllUnicode>
+	std::optional<std::string> to_escaped_string(const std::string& unicode)
+	{
+		auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ {}, unicode32_bad_conversion };
+		const auto u32 = cvt.from_bytes(unicode);
+		if (u32 == unicode32_bad_conversion)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << "Invalid utf-8 string"s;
+				return {};
+			}
+			else
+				throw parser_error{ "Invalid utf-8 string"s };
+		}
+
+		auto out = std::string{};
+		const auto end = std::end(u32);
+		for (auto ch : u32)
+		{
+			switch (ch)
+			{
+			case U'\b':
+				out += "\\b"s;
+				continue;
+			case U'\n':
+				out += "\\n"s;
+				continue;
+			case U'\f':
+				out += "\\f"s;
+				continue;
+			case U'\r':
+				out += "\\r"s;
+				continue;
+			case U'\"':
+				out += "\\\""s;
+				continue;
+			case U'\\':
+				out += "\\\\"s;
+				continue;
+			case U'\t':
+				//out.push_back('\t');
+				out += "\\t"s;
+				continue;
+			}
+
+			bool escape = ch < 0x20; // control chars
+
+			if constexpr (EscapeAllUnicode)
+				escape = ch > 0x7F; // non-ascii unicode
+
+			if (escape)
+			{
+				const auto integral = static_cast<uint32_t>(ch);
+				auto chars = std::array<char, 8>{};
+				const auto ret = std::to_chars(chars.data(), chars.data() + size(chars), integral, 16);
+				assert(ret.ec == std::errc{});
+				const auto dist = ret.ptr - chars.data();
+				auto pad_limit = 8;
+				if (dist > 3)
+					out += "\\U"s;
+				else
+				{
+					out += "\\u"s;
+					pad_limit = 4;
+				}
+
+				const auto pad =  pad_limit - dist;
+				for (auto i = int{}; i < pad; ++i)
+					out.push_back('0');
+
+				for (auto i = int{}; i < dist; ++i)
+					out.push_back(chars[i]);
+			}
+			else if(ch > 0x7F) // check for unicode chars
+			{
+				const auto u8 = cvt.to_bytes(ch);
+				out += u8;
+			}
+			else
+				out.push_back(static_cast<char>(ch));
+		}
+
+		return out;
+	}
+
+	// explicit instatiation for the test decoder
+	template std::optional<std::string> to_escaped_string<false, false>(const std::string&);
 
 	// replace string chars with proper escape codes
 	template<bool NoThrow>
@@ -788,7 +878,7 @@ namespace another_toml
 		return c & 0b10000000;
 	}
 
-	std::int32_t parse_unicode_char(char c, parser_state& strm)
+	std::uint32_t parse_unicode_char(char c, parser_state& strm)
 	{
 		if (!is_unicode_start(c))
 			return utf8_error_char;
@@ -802,7 +892,7 @@ namespace another_toml
 			++bytes;
 
 		assert(bytes >= 1);
-		auto out = std::int32_t{};
+		auto out = std::uint32_t{};
 		switch (bytes)
 		{
 		case 2:
