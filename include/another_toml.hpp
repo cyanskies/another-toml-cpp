@@ -20,6 +20,12 @@ namespace another_toml
 		using std::runtime_error::runtime_error;
 	};
 
+	class unicode_error : public parser_error
+	{
+	public:
+		using parser_error::parser_error;
+	};
+
 	//thrown if eof is encountered in an unexpected location(inside a quote or table name, etc.)
 	class unexpected_eof : public parser_error
 	{
@@ -171,7 +177,7 @@ namespace another_toml
 		node_iterator end() const noexcept;
 		std::size_t size() const noexcept;
 
-		const std::string& as_string() const noexcept;
+		std::string as_string() const;
 		std::int64_t as_int() const;
 		double as_floating() const;
 		bool as_boolean() const;
@@ -263,18 +269,20 @@ namespace another_toml
 	root_node parse(std::istream&, detail::no_throw_t) noexcept;
 	//node parse(const std::filesystem::path& filename, detail::no_throw_t) noexcept;
 
+	//global writer options
 	struct writer_options
 	{
 		// if true, avoids unrequired whitespace eg: name = value -> name=value
 		bool compact_spacing = false;
 		// how many characters before splitting next array element to new line
-		// set to 0 to never split
 		int array_line_length = 80;
 	};
 
 	class writer
 	{
 	public:
+		writer();
+
 		// note their is an implicit root table
 		// you cannot end_table to end it
 		// you can write values and arrays into it, before adding
@@ -283,55 +291,71 @@ namespace another_toml
 		// [tables]
 		// use end table to control nesting
 		void begin_table(std::string_view);
-		void end_table();
+		void end_table() noexcept;
 
 		// arrays:
 		// name = [ elements ]
-		// use write_element() to add elements
+		// use write_value() to add elements
 		// or begin_inline_table to add a table as an element
 		void begin_array(std::string_view name);
-		void end_array();
+		void end_array() noexcept;
 
 		// begins an inline table
 		// name will be ignored if being added as an array member
 		void begin_inline_table(std::string_view name);
-		void end_inline_table();
+		void end_inline_table() noexcept;
 
 		// begin an array of tables
 		// [[array]]
 		// keep calling begin_array_tables with the same name
 		// to add new tables to the array
 		void begin_array_tables(std::string_view);
-		void end_array_tables();
-
-		// key: values
-		void write(std::string_view name, std::string value);
-		void write(std::string_view name, std::int64_t value);
-		void write(std::string_view name, double value);
-		void write(std::string_view name, bool value);
-		void write(std::string_view name, date_time value);
-		void write(std::string_view name, local_date_time value);
-		void write(std::string_view name, date value);
-		void write(std::string_view name, time value);
+		void end_array_tables() noexcept;
 
 		// write values on their own, for arrays
-		void write_element(std::string value);
-		void write_element(std::int64_t value);
-		void write_element(double value);
-		void write_element(bool value);
-		void write_element(date_time value);
-		void write_element(local_date_time value);
-		void write_element(date value);
-		void write_element(time value);
+		void write_key(std::string_view);
+
+
+		struct literal_t {};
+		static constexpr auto literal_string_tag = literal_t{};
+
+		void write_value(std::string value);
+		// pass literal string tag to mark a string as being a literal
+		void write_value(std::string value, literal_t);
+
+		enum class int_base
+		{
+			dec,
+			hex,
+			oct,
+			bin
+		};
+
+		void write_value(std::int64_t value, int_base = int_base::dec);
+
+		enum class float_rep
+		{
+			normal,
+			scientific
+		};
+
+		void write_value(double value, float_rep = float_rep::normal);
+		void write_value(bool value);
+		void write_value(date_time value);
+		void write_value(local_date_time value);
+		void write_value(date value);
+		void write_value(time value);
 
 		void set_options(writer_options o)
 		{
 			_opts = o;
 		}
 
-		std::ostream& operator<<(std::ostream& lhs) const;
+		std::string to_string() const;
+		friend std::ostream& operator<<(std::ostream&, const writer& rhs);
 
 	private:
+		std::vector<detail::index_t> _stack{ 0 };
 		writer_options _opts;
 		std::unique_ptr<detail::toml_internal_data, detail::toml_data_deleter> _data;
 	};

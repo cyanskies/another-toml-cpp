@@ -1,11 +1,7 @@
-// Deprecated but not marked for removal
-// This is the easiest way for us to convert unicode escape codes
-// We dont use the functionallity that was considered a vulnerability AFAIK
-#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
-
 #include "another_toml.hpp"
 
 #include <array>
+#include <bitset>
 #include <cassert>
 #include <codecvt>
 #include <fstream>
@@ -16,6 +12,8 @@
 #include <string_view>
 #include <variant>
 #include <vector>
+
+#include "string_util.hpp"
 
 using namespace std::string_literals;
 using namespace std::string_view_literals;
@@ -29,7 +27,25 @@ namespace another_toml
 
 	namespace detail
 	{	
-		using variant_t = std::variant<std::monostate, std::int64_t, double, bool,
+		struct integral
+		{
+			std::int64_t value;
+			writer::int_base base;
+		};
+
+		struct floating
+		{
+			double value;
+			writer::float_rep rep;
+		};
+
+		struct string_t
+		{
+			// string value is stored in internal_node::name
+			bool literal = false;
+		};
+
+		using variant_t = std::variant<std::monostate, string_t, integral, floating, bool,
 			//dates,
 			date_time, local_date_time, date, time>;
 
@@ -43,22 +59,22 @@ namespace another_toml
 
 		struct internal_node
 		{
-			// includes the table names
 			std::string name;
 			node_type type = node_type::bad_type;
 			value_type v_type = value_type::unknown;
 			variant_t value;
 			table_def table_type = table_def::not_table;
+			// a closed table can still have child tables added, but not child keys
 			bool closed = true;
 			index_t next = bad_index;
 			index_t child = bad_index;
-			// a closed table can still have child tables added, but not child keys
 		};
 
 		struct toml_internal_data
 		{
-			// not tables: this is all nodes
-			std::vector<internal_node> tables;
+			// TODO: not tables: this is all nodes
+			//		rename to nodes
+			std::vector<internal_node> tables = { internal_node{{}, node_type::table} };
 #ifndef NDEBUG
 			std::string input_log;
 #endif
@@ -97,6 +113,7 @@ namespace another_toml
 		return bad_index;
 	}
 
+	// method defs for nodes
 	template<bool R>
 	bool basic_node<R>::good() const noexcept
 	{
@@ -216,9 +233,157 @@ namespace another_toml
 		return size;
 	}
 
-	template<bool R>
-	const std::string& basic_node<R>::as_string() const noexcept
+	struct to_string_visitor
 	{
+	public:
+		const writer_options& options;
+
+		std::string operator()(std::monostate)
+		{
+			return "Error";
+		}
+
+		std::string operator()(string_t)
+		{
+			return "Error";
+		}
+
+		std::string operator()(detail::integral i)
+		{
+			auto out = std::stringstream{};
+			using base = writer::int_base;
+			if (i.base == base::bin)
+			{
+				// negative values are forbidden
+				assert(i.value >= 0);
+				auto bin = std::bitset<64>{ *reinterpret_cast<uint64_t*>(&i.value) }.to_string();
+				auto beg = begin(bin);
+				auto end = std::end(bin);
+				while (beg != end && *beg == '0')
+					++beg;
+				out << "0b"s << std::string_view{ beg, end };
+				return out.str();
+			}
+			else
+			{
+				switch (i.base)
+				{
+				case base::dec:
+					out << std::dec;
+					break;
+				case base::hex:
+					out << std::hex << "0x"s;
+					break;
+				case base::oct:
+					out << std::oct << "0o"s;
+					break;
+				}
+
+				if (i.base != base::dec)
+				{
+					assert(i.value >= 0);
+				}
+
+				out << i.value;
+				return out.str();
+			}
+		}
+
+		std::string operator()(detail::floating d)
+		{
+			if (std::isnan(d.value))
+				return "nan"s;
+			else if (d.value == std::numeric_limits<double>::infinity())
+				return "inf"s;
+			else if (d.value == -std::numeric_limits<double>::infinity())
+				return "-inf"s;
+
+			auto strm = std::ostringstream{};
+			if (d.rep == writer::float_rep::scientific)
+			{
+				strm << std::scientific << d.value;
+				return strm.str();
+			}
+
+			strm << std::setprecision(19) << d.value;
+			auto str = strm.str();
+			if (str.find('.') == std::string::npos)
+				str += ".0"s;
+			return str;
+		}
+
+		std::string operator()(date v)
+		{
+			auto strm = std::ostringstream{};
+			strm << std::setfill('0');
+			strm << std::setw(4) << v.year;
+			strm << '-' << std::setw(2) << static_cast<uint16_t>(v.month);
+			strm << '-' << std::setw(2) << static_cast<uint16_t>(v.day);
+			return strm.str();
+		}
+
+		std::string operator()(date_time v)
+		{
+			auto out = this->operator()(v.datetime);
+			if (v.offset_hours == 0 &&
+				v.offset_minutes == 0)
+			{
+				out.push_back('Z');
+			}
+			else
+			{
+				auto strm = std::ostringstream{};
+				strm << std::setfill('0');
+				out.push_back(v.offset_positive ? '+' : '-');
+				//strm << v.offset_positive ? '+' : '-';
+				strm << std::setw(2) << static_cast<uint16_t>(v.offset_hours);
+				strm << ':' << std::setw(2) << static_cast<uint16_t>(v.offset_minutes);
+				out += strm.str();
+			}
+			return out;
+		}
+
+		std::string operator()(time v)
+		{
+			auto strm = std::ostringstream{};
+			strm << std::setfill('0');
+			strm << std::setw(2) << static_cast<uint16_t>(v.hours);
+			strm << ':' << std::setw(2) << static_cast<uint16_t>(v.minutes);
+			strm << ':' << std::setw(2) << static_cast<uint16_t>(v.seconds);
+			if (v.seconds_frac != 0.f)
+			{
+				auto fracs = std::to_string(v.seconds_frac);
+				while (!empty(fracs) && fracs.back() == '0')
+					fracs.pop_back();
+				strm << fracs.substr(1);
+			}
+			return strm.str();
+		}
+
+		std::string operator()(local_date_time v)
+		{
+			auto out = this->operator()(v.date);
+			out.push_back('T');
+			out += this->operator()(v.time);
+			return out;
+		}
+
+		std::string operator()(bool b)
+		{
+			return b ? "true"s : "false"s;
+		}
+	};
+
+
+	template<bool R>
+	std::string basic_node<R>::as_string() const
+	{
+		if(_data->tables[_index].type == node_type::value &&
+			_data->tables[_index].v_type != value_type::string)
+		{
+			return std::visit(to_string_visitor{ writer_options{} }, _data->tables[_index].value);
+		}
+
 		return _data->tables[_index].name;
 	}
 
@@ -227,7 +392,8 @@ namespace another_toml
 	{
 		try
 		{
-			return std::get<std::int64_t>(_data->tables[_index].value);
+			const auto integral = std::get<detail::integral>(_data->tables[_index].value);
+			return integral.value;
 		}
 		catch (const std::bad_variant_access& e)
 		{
@@ -240,7 +406,7 @@ namespace another_toml
 	{
 		try
 		{
-			return std::get<double>(_data->tables[_index].value);
+			return std::get<floating>(_data->tables[_index].value).value;
 		}
 		catch (const std::bad_variant_access& e)
 		{
@@ -316,6 +482,535 @@ namespace another_toml
 	template class basic_node<true>;
 	template class basic_node<false>;
 
+	// helpers for adding elements to the internal data structure
+	template<bool NoThrow>
+	static index_t insert_child(detail::toml_internal_data& d, const index_t parent, detail::internal_node n);
+	template<bool NoThrow>
+	static index_t insert_child_table(const index_t parent, std::string name, detail::toml_internal_data& d, table_def t);
+	template<bool NoThrow>
+	static index_t insert_child_table_array(index_t parent, std::string name, detail::toml_internal_data& d);
+
+	//method defs for writer
+	writer::writer()
+		: _data{ new toml_internal_data{} }
+	{}
+
+	void writer::begin_table(std::string_view table_name)
+	{
+		auto i = _stack.back();
+		const auto t = _data->tables[i].type;
+		assert(t == node_type::table ||
+			t == node_type::inline_table ||
+			t == node_type::array ||
+			t == node_type::array_tables);
+
+		auto new_table = insert_child_table<false>(i, std::string{ table_name }, *_data, table_def::header);
+		assert(new_table != bad_index);
+		_stack.emplace_back(new_table);
+	}
+
+	void writer::end_table() noexcept
+	{
+		assert(!empty(_stack));
+		auto i = _stack.back();
+		assert(_data->tables[i].type == node_type::table);
+		_stack.pop_back();
+		return;
+	}
+
+	void writer::begin_array(std::string_view name)
+	{
+		auto i = _stack.back();
+		const auto t = _data->tables[i].type;
+		assert(t == node_type::table ||
+			t == node_type::inline_table ||
+			t == node_type::array);
+
+		auto new_arr = insert_child<false>(*_data, i, internal_node{ std::string{ name }, node_type::array });
+		assert(new_arr != bad_index);
+		_stack.emplace_back(new_arr);
+		return;
+	}
+
+	void writer::end_array() noexcept
+	{
+		assert(!empty(_stack));
+		auto i = _stack.back();
+		assert(_data->tables[i].type == node_type::array);
+		_stack.pop_back();
+		return;
+	}
+
+	void writer::begin_inline_table(std::string_view name)
+	{
+		auto i = _stack.back();
+		const auto t = _data->tables[i].type;
+		assert(t == node_type::table ||
+			t == node_type::array ||
+			t == node_type::inline_table);
+
+		auto new_table = insert_child<false>(*_data, i, internal_node{ std::string{ name }, node_type::inline_table });
+		assert(new_table != bad_index);
+		_stack.emplace_back(new_table);
+		return;
+	}
+
+	void writer::end_inline_table() noexcept
+	{
+		assert(!empty(_stack));
+		auto i = _stack.back();
+		assert(_data->tables[i].type == node_type::inline_table);
+		_stack.pop_back();
+		return;
+	}
+
+	void writer::begin_array_tables(std::string_view name)
+	{
+		auto i = _stack.back();
+		const auto t = _data->tables[i].type;
+		assert(t == node_type::table ||
+			t == node_type::array_tables);
+
+		auto new_table = insert_child_table_array<false>(i, std::string{ name }, *_data);
+		assert(new_table != bad_index);
+		_stack.emplace_back(new_table);
+	}
+
+	void writer::end_array_tables() noexcept
+	{
+		assert(!empty(_stack));
+		auto i = _stack.back();
+		assert(_data->tables[i].type == node_type::table);
+		_stack.pop_back();
+		return;
+	}
+
+	// write values on their own, for arrays
+	void writer::write_key(std::string_view name)
+	{
+		auto i = _stack.back();
+		const auto t = _data->tables[i].type;
+		assert(t == node_type::table ||
+			t == node_type::inline_table);
+
+		auto new_table = insert_child<false>(*_data, i, internal_node{ std::string{ name }, node_type::key });
+		assert(new_table != bad_index);
+		_stack.emplace_back(new_table);
+		return;
+	}
+
+	struct string_cont
+	{
+		std::string value;
+		bool literal;
+	};
+
+	template<typename Value>
+	static index_t write_value_impl(index_t parent, toml_internal_data& d, value_type ty, Value v)
+	{
+		const auto t = d.tables[parent].type;
+		assert(t == node_type::key ||
+			t == node_type::array);
+
+		auto new_node = bad_index;
+		if constexpr(std::is_same_v<string_cont, std::decay_t<Value>>)
+			new_node = insert_child<false>(d, parent, internal_node{ std::move(v.value), node_type::value, ty, string_t{ v.literal } });
+		else
+			new_node = insert_child<false>(d, parent, internal_node{ {}, node_type::value, ty, std::move(v) });
+
+		assert(new_node != bad_index);
+		return new_node;
+	}
+
+	void writer::write_value(std::string value)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::move(value), false });
+		if (_data->tables[_stack.back()].type == node_type::key)
+			_stack.pop_back();
+		return;
+	}
+
+	void writer::write_value(std::string value, literal_t)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::move(value), true });
+		if (_data->tables[_stack.back()].type == node_type::key)
+			_stack.pop_back();
+		return;
+	}
+
+	void writer::write_value(std::int64_t value, int_base base)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::integer, detail::integral{ value, base });
+		if(_data->tables[_stack.back()].type == node_type::key)
+			_stack.pop_back(); 
+		return;
+	}
+
+	void writer::write_value(double value, float_rep rep)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::floating_point, detail::floating{ value, rep });
+		if(_data->tables[_stack.back()].type == node_type::key) 
+			_stack.pop_back();
+		return;
+	}
+
+	void writer::write_value(bool value)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::boolean, std::move(value));
+		if(_data->tables[_stack.back()].type == node_type::key) 
+			_stack.pop_back();
+		return;
+	}
+
+	void writer::write_value(date_time value)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::date_time, std::move(value));
+		if(_data->tables[_stack.back()].type == node_type::key) 
+			_stack.pop_back();
+		return;
+	}
+
+	void writer::write_value(local_date_time value)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::local_date_time, std::move(value));
+		if(_data->tables[_stack.back()].type == node_type::key) 
+			_stack.pop_back();
+		return;
+	}
+
+	void writer::write_value(date value)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::local_date, std::move(value));
+		if(_data->tables[_stack.back()].type == node_type::key) 
+			_stack.pop_back();
+		return;
+	}
+
+	void writer::write_value(time value)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::local_time, std::move(value));
+		if(_data->tables[_stack.back()].type == node_type::key) 
+			_stack.pop_back();
+		return;
+	}
+
+	std::string writer::to_string() const
+	{
+		auto sstream = std::ostringstream{};
+		sstream << *this;
+		return sstream.str();
+	}
+
+	// check if any of 'i's children are off the passed type
+	static bool is_headered_table(index_t i, const toml_internal_data& d) noexcept
+	{
+		auto child = d.tables[i].child;
+		while (child != bad_index)
+		{
+			const auto& c_ref = d.tables[child];
+			if (node_type::key == c_ref.type ||
+				(node_type::value != c_ref.type &&
+					!empty(c_ref.name)))
+			{
+				return true;
+			}
+
+			child = c_ref.next;
+		}
+		return false;
+	}
+
+	static std::string make_table_name(const std::vector<index_t>& nodes, const toml_internal_data& d)
+	{
+		assert(!empty(nodes));
+		if (nodes.empty())
+			return "\"\""s;
+
+		auto out = std::string{};
+		auto beg = begin(nodes);
+		const auto end = std::end(nodes);
+		for (beg; beg != end; ++beg)
+		{
+			if (empty(d.tables[*beg].name))
+				continue;
+
+			out += escape_toml_name(d.tables[*beg].name);
+			if (next(beg) != end)
+				out.push_back('.');
+		}
+
+		return out;
+	}
+
+	static std::vector<index_t> get_children(index_t i, const toml_internal_data& d)
+	{
+		auto children = std::vector<index_t>{};
+		auto child = d.tables[i].child;
+		while (child != bad_index)
+		{
+			children.emplace_back(child);
+			child = d.tables[child].next;
+		}
+		return children;
+	}
+
+	template<bool WriteOne>
+	static void write_children(std::ostream& strm, const toml_internal_data& d,
+		const writer_options& o, std::vector<index_t> stack, std::streampos& last_newline)
+	{
+		assert(!empty(stack));
+		const auto parent = stack.back();
+		const auto parent_type = d.tables[parent].type;
+
+		auto children = get_children(parent, d);
+
+		// make sure root keys are written before child tables
+		if (parent == 0)
+		{
+			std::partition(begin(children), end(children), [&d](const index_t i) {
+				return d.tables[i].type == node_type::key ||
+					d.tables[i].type == node_type::array ||
+					d.tables[i].type == node_type::inline_table;
+				});
+		}
+
+		auto beg = begin(children);
+		const auto end = std::end(children);
+		for (beg; beg != end; ++beg)
+		{
+			const auto& c_ref = d.tables[*beg];
+			switch (c_ref.type)
+			{
+			case node_type::table:
+			{
+				assert(parent_type == node_type::table ||
+					parent_type == node_type::array_tables);
+
+				if (last_newline != std::streampos{} &&
+					size(stack) < 2 &&
+					!o.compact_spacing)
+				{
+					strm << '\n';
+					last_newline = strm.tellp();
+				}
+
+				auto name_stack = stack;
+				name_stack.emplace_back(*beg);
+				if (parent_type != node_type::array_tables && 
+					(is_headered_table(*beg, d) || c_ref.child == bad_index))
+				{
+					strm << '[' << make_table_name(name_stack, d) << "]\n"s;
+					last_newline = strm.tellp();
+				}
+
+				write_children<false>(strm, d, o, std::move(name_stack), last_newline);
+			} break;
+			case node_type::array:
+			{
+				assert(parent_type == node_type::table ||
+					parent_type == node_type::inline_table ||
+					parent_type == node_type::array);
+
+				if (parent_type != node_type::array)
+				{
+					strm << c_ref.name;
+					if (o.compact_spacing)
+						strm << '=';
+					else
+						strm << " = ";
+				}
+
+				strm << '[';
+				if (!o.compact_spacing)
+					strm << ' ';
+
+				if (strm.tellp() - last_newline > o.array_line_length)
+				{
+					strm << '\n';
+					last_newline = strm.tellp();
+				}
+
+				write_children<false>(strm, d, o, { *beg }, last_newline);
+
+				strm << ']';
+				if (parent_type == node_type::table)
+					strm << '\n';
+				else if (parent_type == node_type::array &&
+					next(beg) != end)
+				{
+					if (!o.compact_spacing)
+						strm << ", "s;
+					else
+						strm << ',';
+				}
+				else if (!o.compact_spacing)
+					strm << ' ';
+			} break;
+			case node_type::array_tables:
+			{
+				if (last_newline != std::streampos{} &&
+					size(stack) < 2 &&
+					!o.compact_spacing)
+				{
+					strm << '\n';
+					last_newline = strm.tellp();
+				}
+
+				auto name_stack = stack;
+				name_stack.emplace_back(*beg);
+				const auto child_tables = get_children(*beg, d);
+				const auto child_end = std::end(child_tables);
+				for(auto beg = begin(child_tables); beg != child_end; ++beg)
+				{
+					strm << "[["s << make_table_name(name_stack, d) << "]]\n"s;
+					last_newline = strm.tellp();
+					name_stack.emplace_back(*beg);
+					write_children<false>(strm, d, o, name_stack, last_newline);
+					name_stack.pop_back();
+				}
+			} break;
+			case node_type::key:
+			{
+				assert(parent_type == node_type::table ||
+					parent_type == node_type::inline_table);
+				//key_name
+				strm << escape_toml_name(c_ref.name);
+				if (!o.compact_spacing)
+					strm << " = "s;
+				else
+					strm << '=';
+
+				//value
+				write_children<true>(strm, d, o, { *beg }, last_newline);
+
+				if (parent_type == node_type::inline_table)
+				{
+					if (o.compact_spacing)
+					{
+						if (next(beg) != end)
+							strm << ',';
+					}
+					else
+					{
+						if (next(beg) != end)
+							strm << ", "s;
+						else
+							strm << ' ';
+					}
+				}
+				else
+				{
+					strm << '\n';
+					last_newline = strm.tellp();
+				}
+			} break;
+			case node_type::inline_table:
+			{
+				assert(parent_type == node_type::table ||
+					parent_type == node_type::inline_table ||
+					parent_type == node_type::array);
+
+				if (parent_type != node_type::array)
+				{
+					strm << c_ref.name;
+					if (o.compact_spacing)
+						strm << " = ";
+					else
+						strm << '=';
+				}
+
+				if (o.compact_spacing)
+					strm << "{ ";
+				else
+					strm << '{';
+
+				write_children<false>(strm, d, o, { *beg }, last_newline);
+
+				if (o.compact_spacing)
+					strm << "} ";
+				else
+					strm << '}';
+
+				if (parent_type != node_type::table &&
+					next(beg) != end)
+				{
+					if (o.compact_spacing)
+						strm << ',';
+					else
+						strm << ", ";
+				}
+			} break;
+			case node_type::value:
+			{
+				if (c_ref.v_type == value_type::string)
+				{
+					const auto& string_extra = std::get<string_t>(c_ref.value);
+					if (!string_extra.literal)
+					{
+						strm << '\"';
+						const auto str = to_escaped_string(c_ref.name);
+						strm.write(data(str), size(str));
+						strm << '\"';
+					}
+					else
+					{
+						strm << '\'';
+						strm.write(data(c_ref.name), size(c_ref.name));
+						strm << '\'';
+					}
+				}
+				else if (c_ref.v_type == value_type::bad ||
+					c_ref.v_type == value_type::unknown)
+					assert(false);//bad
+				else
+				{
+					const auto str = std::visit(to_string_visitor{ o }, c_ref.value);
+					strm << str;
+				}
+
+				if (parent_type == node_type::array)
+				{
+					if (o.compact_spacing)
+					{
+						if (next(beg) != end)
+							strm << ',';
+					}
+					else
+					{
+						if (next(beg) != end)
+							strm << ", "s;
+						else
+							strm << ' ';
+					}
+
+					if (strm.tellp() - last_newline > o.array_line_length)
+					{
+						strm << '\n';
+						last_newline = strm.tellp();
+					}
+				}
+				
+				if constexpr (WriteOne)
+				{
+					if (next(beg) != end)
+						assert(false);
+				}
+			} break;
+			default:
+				assert(false);// bad
+			}
+		}
+		return;
+	}
+
+	std::ostream& operator<<(std::ostream& o, const writer& w)
+	{
+		auto pos = o.tellp();
+		write_children<false>(o, *w._data, w._opts, { 0 }, pos);
+		
+		return o;
+	}
+
 	void insert_bad(detail::toml_internal_data& d)
 	{
 		d.tables.emplace_back(internal_node{ {}, node_type::bad_type });
@@ -335,7 +1030,7 @@ namespace another_toml
 			while (true)
 			{
 				auto& child_ref = d.tables[child];
-				if (child_ref.name == n.name)
+				if (child_ref.name == n.name && !allow_duplicates)
 				{
 					if (child_ref.type == node_type::table && 
 						n.type == node_type::table &&
@@ -343,13 +1038,13 @@ namespace another_toml
 						p.table_type == n.table_type)
 						return child;
 
-					if (!allow_duplicates)
-					{
+					//if (!allow_duplicates)
+					//{
 						if constexpr (NoThrow)
 							return bad_index;
 						else
 							throw duplicate_element{ "Tried to insert duplicate element: "s + n.name + ", into: " + p.name };
-					}
+					//}
 				}
 
 				if (child_ref.next == bad_index)
@@ -367,7 +1062,7 @@ namespace another_toml
 		return new_index;
 	}
 
-	index_t find_child(const detail::toml_internal_data& d, const index_t parent, const std::string_view s) noexcept
+	static index_t find_child(const detail::toml_internal_data& d, const index_t parent, const std::string_view s) noexcept
 	{
 		auto& p = d.tables[parent];
 		if (p.child == bad_index)
@@ -513,14 +1208,6 @@ namespace another_toml
 			ch == 127;
 	} 
 
-	constexpr auto utf8_error_char = 0xD7FF17;
-	constexpr bool valid_utf8_char(int val) noexcept
-	{
-		return (val >= 0 && val < 0xD800) ||
-			(val > 0xDFFF && val <= 0xD7FF16) ||
-			(val >= 0xE00016 && val <= 0x10FFFF);
-	}
-
 	// limit to a-z, A-Z, 0-9, '-' and '_'
 	constexpr bool valid_key_name_char(char ch) noexcept
 	{
@@ -551,7 +1238,7 @@ namespace another_toml
 	}
 
 	template<bool NoThrow>
-	static index_t insert_child_table(index_t parent, std::string name, detail::toml_internal_data& d, table_def t)
+	static index_t insert_child_table(const index_t parent, std::string name, detail::toml_internal_data& d, table_def t)
 	{
 		auto table = detail::internal_node{ std::move(name) , node_type::table };
 		table.closed = false;
@@ -644,244 +1331,16 @@ namespace another_toml
 		return insert_child<NoThrow>(d, parent, std::move(key));
 	}
 
-	constexpr auto escape_codes_raw = std::array{
-		"\\b"sv, "\\t"sv, "\\n"sv, "\\f"sv, "\\r"sv, "\\\""sv, "\\\\"sv // "\\uXXXX" "\\UXXXXXXXX"
-	};
-
-	constexpr auto escape_codes_char = std::array{
-		'\b', '\t', '\n', '\f', '\r', '\"', '\\' // "\\uXXXX" "\\UXXXXXXXX"
-	};
-
-	const auto unicode_bad_conversion = "conversion_error"s;
-	const auto unicode32_bad_conversion = U"conversion_error"s;
-
 	template<bool NoThrow>
-	static std::optional<std::string> to_unicode_str(char32_t ch)
-	{
-		auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ unicode_bad_conversion };
-		const auto u8 = cvt.to_bytes(ch);
-		if (u8 == unicode_bad_conversion)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << "Invalid utf-8 char"s;
-				return {};
-			}
-			else
-				throw parser_error{ "Invalid utf-8 chars"s };
-		}
-		return u8;
-	}
+	std::optional<std::string> to_u8_str(char32_t ch);
 
-	template<bool NoThrow, bool EscapeAllUnicode>
-	std::optional<std::string> to_escaped_string(const std::string& unicode)
-	{
-		auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ {}, unicode32_bad_conversion };
-		const auto u32 = cvt.from_bytes(unicode);
-		if (u32 == unicode32_bad_conversion)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << "Invalid utf-8 string"s;
-				return {};
-			}
-			else
-				throw parser_error{ "Invalid utf-8 string"s };
-		}
-
-		auto out = std::string{};
-		const auto end = std::end(u32);
-		for (auto ch : u32)
-		{
-			switch (ch)
-			{
-			case U'\b':
-				out += "\\b"s;
-				continue;
-			case U'\n':
-				out += "\\n"s;
-				continue;
-			case U'\f':
-				out += "\\f"s;
-				continue;
-			case U'\r':
-				out += "\\r"s;
-				continue;
-			case U'\"':
-				out += "\\\""s;
-				continue;
-			case U'\\':
-				out += "\\\\"s;
-				continue;
-			case U'\t':
-				//out.push_back('\t');
-				out += "\\t"s;
-				continue;
-			}
-
-			bool escape = ch < 0x20; // control chars
-
-			if constexpr (EscapeAllUnicode)
-				escape = ch > 0x7F; // non-ascii unicode
-
-			if (escape)
-			{
-				const auto integral = static_cast<uint32_t>(ch);
-				auto chars = std::array<char, 8>{};
-				const auto ret = std::to_chars(chars.data(), chars.data() + size(chars), integral, 16);
-				assert(ret.ec == std::errc{});
-				const auto dist = ret.ptr - chars.data();
-				auto pad_limit = 8;
-				if (dist > 3)
-					out += "\\U"s;
-				else
-				{
-					out += "\\u"s;
-					pad_limit = 4;
-				}
-
-				const auto pad =  pad_limit - dist;
-				for (auto i = int{}; i < pad; ++i)
-					out.push_back('0');
-
-				for (auto i = int{}; i < dist; ++i)
-					out.push_back(chars[i]);
-			}
-			else if(ch > 0x7F) // check for unicode chars
-			{
-				const auto u8 = cvt.to_bytes(ch);
-				out += u8;
-			}
-			else
-				out.push_back(static_cast<char>(ch));
-		}
-
-		return out;
-	}
-
-	// explicit instatiation for the test decoder
-	template std::optional<std::string> to_escaped_string<false, false>(const std::string&);
-
-	// replace string chars with proper escape codes
-	template<bool NoThrow>
-	static bool replace_escape_chars(std::string& s) noexcept(NoThrow)
-	{
-		static_assert(size(escape_codes_raw) == size(escape_codes_char));
-		constexpr auto codes_size = size(escape_codes_raw);
-
-		auto pos = std::size_t{};
-		while (pos < size(s))
-		{
-			const auto code_beg = s.find("\\", pos);
-			if (code_beg == std::string::npos)
-				break; //we're done
-
-			const auto code_mid = code_beg + 1;
-			if (code_mid >= size(s))
-				break;// TODO: unmatched escape char
-
-			auto code_end = code_mid + 1;
-			auto found_code = false;
-			for (auto i = std::size_t{}; i < codes_size; ++i)
-			{
-				if (escape_codes_raw[i] == std::string_view{ &s[code_beg], &s[code_end] })
-				{
-					s.replace(code_beg, 2, 1, escape_codes_char[i]);
-					found_code = true;
-					pos = code_beg;
-					break;
-				}
-			}
-
-			if (!found_code)
-			{
-				// Unicode chars are 1-4 bytes, the escape code is at least 6 chars
-				// so the resulting string will always be shorter, string won't have
-				// to alloc.
-				if (const auto unicode_char = s[code_mid]; 
-					unicode_char == 'u' || unicode_char == 'U')
-				{
-					if (s[code_mid] == 'u') // \uXXXX
-						code_end = code_mid + 5;
-					else if (s[code_mid] == 'U') // \UXXXXXXXX
-						code_end = code_mid + 9;
-
-					if (size(s) < code_end)
-					{
-						if constexpr (NoThrow)
-						{
-							std::cerr << "Invalid unicode escape code: "s << std::string_view{ &s[code_beg], &s[size(s) - 1] } << '\n';
-							return false;
-						}
-						else
-							throw unexpected_character{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], &s[size(s) - 1] } };
-					}
-
-					auto int_val = int{};
-					const auto result = std::from_chars(&s[code_mid + 1], &s[code_end], int_val, 16);
-					if (result.ptr != &s[code_end] ||
-						result.ec == std::errc::result_out_of_range ||
-						!valid_utf8_char(int_val))
-					{
-						if constexpr (NoThrow)
-						{
-							std::cerr << "Invalid unicode escape code: "s << std::string_view{ &s[code_beg], &s[code_end] } << '\n';
-							return false;
-						}
-						else
-							throw unexpected_character{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], &s[code_end] } };
-					}
-
-					const auto u8 = to_unicode_str<NoThrow>(int_val);
-					if constexpr (NoThrow)
-					{
-						if (!u8)
-						{
-							std::cerr << "Failed to convert unicode escape code to utf-8: "s << std::string_view{ &s[code_beg], &s[code_end] } << '\n';
-							return false;
-						}
-					}
-
-					assert(u8);
-					s.replace(code_beg, code_end - code_beg, *u8);
-					pos = code_beg + size(*u8);
-					continue;
-				}
-
-				if constexpr (NoThrow)
-				{
-					std::cerr << "Illigal escape code in quoted string: \"\\"s << s[code_mid] << "\"\n"s;
-					return false;
-				}
-				else
-					throw parser_error{ "Illigal escape code in quoted string: \"\\"s + s[code_mid] + "\""s };
-			}
-
-			++pos;
-		}
-
-		return true;
-	}
-
-	constexpr bool is_unicode_start(char c) noexcept
-	{
-		return c & 0b11000000;
-	}
-
-	constexpr bool is_unicode_continuation(char c) noexcept
-	{
-		return c & 0x80 && !(c & 0x40);
-	}
-
-	constexpr bool is_unicode(char c) noexcept
-	{
-		return c & 0b10000000;
-	}
+	extern template std::optional<std::string> to_u8_str<true>(char32_t ch);
+	extern template std::optional<std::string> to_u8_str<false>(char32_t ch);
 
 	std::uint32_t parse_unicode_char(char c, parser_state& strm)
 	{
 		if (!is_unicode_start(c))
-			return utf8_error_char;
+			return unicode_error_char;
 
 		int bytes = 1;
 		if (c & 0b01000000)
@@ -910,15 +1369,15 @@ namespace another_toml
 		{
 			auto [ch, eof] = strm.get_char<true>();
 			if (eof || !is_unicode_continuation(ch))
-				return utf8_error_char;
+				return unicode_error_char;
 			out = out << 6; 
 			out |= ch & 0b00111111;
 		}
 
-		if (valid_utf8_char(out))
+		if (valid_u32_char(out))
 			return out;
 
-		return utf8_error_char;
+		return unicode_error_char;
 	}
 
 	constexpr bool invalid_string_chars(char ch) noexcept
@@ -996,10 +1455,10 @@ namespace another_toml
 				else
 					throw unexpected_character{ "Illigal control character in string"s };
 			}
-			else if (is_unicode(ch))
+			else if (is_unicode_byte(ch))
 			{
 				const auto unicode = parse_unicode_char(ch, strm);
-				if (unicode == utf8_error_char)
+				if (unicode == unicode_error_char)
 				{
 					if constexpr (NoThrow)
 					{
@@ -1011,7 +1470,7 @@ namespace another_toml
 				}
 				else
 				{
-					const auto u8 = to_unicode_str<NoThrow>(unicode);
+					const auto u8 = to_u8_str<NoThrow>(unicode);
 					if constexpr (NoThrow)
 					{
 						if (!u8)
@@ -1066,6 +1525,12 @@ namespace another_toml
 
 		return out;
 	}
+
+	template<bool NoThrow>
+	std::optional<std::string> replace_escape_chars(std::string_view);
+
+	extern template std::optional<std::string> replace_escape_chars<true>(std::string_view);
+	extern template std::optional<std::string> replace_escape_chars<false>(std::string_view);
 
 	// TODO: break up into smaller functions, the if chain is too chaotic
 	template<bool NoThrow, bool Table = false>
@@ -1131,8 +1596,9 @@ namespace another_toml
 				}
 
 				assert(name);
+				name = replace_escape_chars<NoThrow>(*name);
 
-				if (!replace_escape_chars<NoThrow>(*name))
+				if (!name)
 				{
 					if constexpr (NoThrow)
 					{
@@ -1208,7 +1674,7 @@ namespace another_toml
 					auto child = find_child(d, parent, *name);
 					
 					if (child == bad_index)
-						child = insert_child_table<NoThrow>(parent, *name, d, table_def::dot);
+						child = insert_child_table<NoThrow>(parent, std::move(*name), d, table_def::dot);
 					else if(auto& c = d.tables[child]; 
 						c.type == node_type::array_tables)
 					{
@@ -1299,239 +1765,13 @@ namespace another_toml
 		return { parent, name };
 	}
 
-	enum class match_index 
-	{
-		date = 1,
-		year,
-		month,
-		day,
-		date_time_seperator,
-		time,
-		hours,
-		minues,
-		seconds,
-		seconds_frac,
-		offset,
-		off_z,
-		off_unused,
-		off_sign,
-		off_hours,
-		off_minues
-	};
+	using get_value_type_ret = std::tuple<value_type, variant_t, std::string>;
 
-	using reg_matches = std::match_results<std::string_view::iterator>;
+	// access func from string_util.cpp
+	std::string remove_underscores(std::string_view sv);
 
 	template<bool NoThrow>
-	static std::optional<date> fill_date(const reg_matches& matches) noexcept(NoThrow)
-	{
-		const auto error_msg = "Error parsing date"s;
-
-		auto out = date{};
-		assert(matches[static_cast<std::size_t>(match_index::date)].matched);
-		const auto& years = matches[static_cast<std::size_t>(match_index::year)];
-		assert(years.matched);
-		auto ret = std::from_chars(&*years.first, &*years.second, out.year);
-		if (ret.ptr != &*years.second)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << error_msg;
-				return {};
-			}
-			else
-				throw parser_error{ error_msg };
-		}
-
-		const auto& months = matches[static_cast<std::size_t>(match_index::month)];
-		assert(months.matched);
-		ret = std::from_chars(&*months.first, &*months.second, out.month);
-		if (ret.ptr != &*months.second)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << error_msg;
-				return {};
-			}
-			else
-				throw parser_error{ error_msg };
-		}
-
-		if (out.month == 0 || out.month > 12)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << "Month out of range\n"s;
-				return {};
-			}
-			else
-				throw parser_error{ "Month out of range"s };
-		}
-
-		const auto& days = matches[static_cast<std::size_t>(match_index::day)];
-		assert(days.matched);
-		const auto day_end = &*days.first + days.length();
-		ret = std::from_chars(&*days.first, day_end , out.day);
-		if (ret.ptr != day_end)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << error_msg;
-				return {};
-			}
-			else
-				throw parser_error{ error_msg };
-		}
-
-		auto max_days = 31;
-		switch (out.month)
-		{
-		case 2:
-			max_days = 28;
-			break;
-		case 4:
-			[[fallthrough]];
-		case 6:
-			[[fallthrough]];
-		case 9:
-			[[fallthrough]];
-		case 11:
-			max_days = 30;
-		}
-
-		if (out.day == 0 || out.day > max_days)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << "Day out of range\n"s;
-				return {};
-			}
-			else
-				throw parser_error{ "Day out of range"s };
-		}
-
-		return out;
-	}
-
-	template<bool NoThrow>
-	static std::optional<time> fill_time(const reg_matches& matches) noexcept(NoThrow)
-	{
-		const auto error_parsing_time_msg = "Error parsing time"s;
-
-		auto out = time{};
-		assert(matches[static_cast<std::size_t>(match_index::time)].matched);
-		const auto& hours = matches[static_cast<std::size_t>(match_index::hours)];
-		assert(hours.matched);
-		auto ret = std::from_chars(&*hours.first, &*hours.second, out.hours);
-		if (ret.ptr != &*hours.second)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << error_parsing_time_msg;
-				return {};
-			}
-			else
-				throw parser_error{ error_parsing_time_msg };
-		}
-
-		if (out.hours > 23)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << "Hours out of range\n"s;
-				return {};
-			}
-			else
-				throw parser_error{ "Hours out of range"s };
-		}
-			
-		const auto& minutes = matches[static_cast<std::size_t>(match_index::minues)];
-		assert(minutes.matched);
-		ret = std::from_chars(&*minutes.first, &*minutes.second, out.minutes);
-		if (ret.ptr != &*minutes.second)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << error_parsing_time_msg;
-				return{};
-			}
-			else
-				throw parser_error{ error_parsing_time_msg };
-		}
-
-		if (out.minutes > 59)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << "Minutes out of range\n"s;
-				return {};
-			}
-			else
-				throw parser_error{ "Minutes out of range"s };
-		}
-
-		const auto& seconds = matches[static_cast<std::size_t>(match_index::seconds)];
-		assert(seconds.matched);
-		const auto seconds_end = &*seconds.first + seconds.length();
-		ret = std::from_chars(&*seconds.first, seconds_end, out.seconds);
-		if (ret.ptr != seconds_end)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << error_parsing_time_msg;
-				return{};
-			}
-			else
-				throw parser_error{ error_parsing_time_msg };
-		}
-
-		if (out.seconds > 60)
-		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << "Seconds out of range\n"s;
-				return {};
-			}
-			else
-				throw parser_error{ "Seconds out of range"s };
-		}
-
-		const auto& seconds_frac = matches[static_cast<std::size_t>(match_index::seconds_frac)];
-		if (seconds_frac.matched)
-		{
-			const auto frac_end = &*seconds_frac.first + seconds_frac.length();
-			ret = std::from_chars(&*seconds_frac.first, frac_end, out.seconds_frac);
-			if (ret.ptr != frac_end)
-			{
-				if constexpr (NoThrow)
-				{
-					std::cerr << error_parsing_time_msg;
-					return{};
-				}
-				else
-					throw parser_error{ error_parsing_time_msg };
-			}
-		}
-
-		return out;
-	}
-
-	template<bool NoThrow>
-	static std::optional<local_date_time> fill_date_time(const reg_matches& matches) noexcept(NoThrow)
-	{
-		const auto date = fill_date<NoThrow>(matches);
-		const auto time = fill_time<NoThrow>(matches);
-		
-		if constexpr (NoThrow)
-		{
-			if (!date || !time)
-				return {};
-		}
-		
-		return local_date_time{ *date, *time };
-	}
-
-	template<bool NoThrow>
-	static std::tuple<value_type, variant_t, std::string> get_value_type(std::string_view str) noexcept(NoThrow)
+	static get_value_type_ret get_value_type(std::string_view str) noexcept(NoThrow)
 	{
 		if (empty(str))
 			return { value_type::bad, {}, {} };
@@ -1542,30 +1782,9 @@ namespace another_toml
 			return { value_type::boolean, true, std::string{ str } };
 		if (str == "false"sv)
 			return { value_type::boolean, false, std::string{ str } };
-		//	inf, +inf, -inf
-		if (str == "inf"sv || str == "+inf"sv)
-			return { value_type::floating_point, std::numeric_limits<double>::infinity(), std::string{ str } };
-		if (str == "-inf"sv)
-			return { value_type::floating_point, -std::numeric_limits<double>::infinity(), std::string{ str } };
-		//	nan, +nan, -nan
-		if(str == "nan"sv || str == "+nan"sv || str == "-nan"sv)
-			return { value_type::floating_point, std::numeric_limits<double>::quiet_NaN(), "nan"s };
 		
 		const auto beg = begin(str);
 		const auto end = std::end(str);
-
-		// also removes leading '+'
-		const auto remove_underscores = [](std::string_view sv) noexcept {
-			auto str = std::string{ sv };
-			for (auto iter = begin(str); iter != std::end(str); ++iter)
-			{
-				if (*iter == '_')
-					iter = str.erase(iter);
-			}
-			if (!empty(str) && str.front() == '+')
-				str.erase(begin(str));
-			return str;
-		};
 
 		// matches all valid integers with optional underscores after the first digit
 		//  -normal digits(with no leading 0)
@@ -1578,18 +1797,28 @@ namespace another_toml
 
 		if (std::regex_match(beg, end, std::regex{ int_reg }))
 		{
-			auto string = std::invoke(remove_underscores, str);
+			auto string = remove_underscores(str);
 			
 			auto base = 10;
+			auto base_en = writer::int_base::dec;
 			if (size(string) > 1)
 			{
 				const auto base_chars = std::string_view(begin(string), begin(string) + 2);
 				if (base_chars == "0x"sv)
+				{
 					base = 16;
+					base_en = writer::int_base::hex;
+				}
 				else if (base_chars == "0b"sv)
+				{
 					base = 2;
+					base_en = writer::int_base::bin;
+				}
 				else if (base_chars == "0o"sv)
+				{
 					base = 8;
+					base_en = writer::int_base::oct;
+				}
 
 				if (base != 10)
 					string.erase(0, 2);
@@ -1603,7 +1832,7 @@ namespace another_toml
 			if (ret.ptr == string_end)
 			{
 				//str = std::to_string(int_val);
-				return { value_type::integer, {int_val}, std::to_string(int_val)};
+				return { value_type::integer, detail::integral{int_val, base_en}, std::to_string(int_val) };
 			}
 			else if(ret.ec == std::errc::invalid_argument)
 				return { value_type::bad, {}, {} };
@@ -1611,109 +1840,24 @@ namespace another_toml
 				return { value_type::out_of_range, {}, {} };
 		}
 		
-		//floating point(double)
-		constexpr auto float_reg = R"(^[\+\-]?([1-9]+(_?([\d])+)*|0)(\.[\d]+(_?[\d])*)?([eE][\+\-]?[\d]+(_?[\d]+)?)?$)";
-		if (std::regex_match(beg, end, std::regex{ float_reg }))
-		{
-			const auto string = std::invoke(remove_underscores, str);
-			auto floating_val = double{};
-			const auto string_end = &string[0] + size(string);
-			const auto ret = std::from_chars(&string[0], string_end, floating_val);
-			if (ret.ptr == string_end)
-				return { value_type::floating_point, {floating_val}, string };
-			else if (ret.ec == std::errc::invalid_argument)
+		const auto float_ret = parse_float_string(str);
+		if (float_ret)
+			return { value_type::floating_point, floating{ float_ret->value, float_ret->representation }, std::string{str} };
+
+		const auto ret = parse_date_time(str);
+		return std::visit([str](auto&& val)->get_value_type_ret {
+			using T = std::decay_t<decltype(val)>;
+			if constexpr (std::is_same_v<date_time, T>)
+				return { value_type::date_time, val, std::string{str} };
+			else if constexpr (std::is_same_v<local_date_time, T>)
+				return { value_type::local_date_time, val, std::string{str} };
+			else if constexpr (std::is_same_v<date, T>)
+				return { value_type::local_date, val, std::string{str} };
+			else if constexpr (std::is_same_v<time, T>)
+				return { value_type::local_time, val, std::string{str} };
+			else
 				return { value_type::bad, {}, {} };
-			else if (ret.ec == std::errc::result_out_of_range)
-				return { value_type::out_of_range, {}, {} };
-		}
-
-		constexpr auto date_time_reg =
-			R"(^((\d{4})-(\d{2})-(\d{2}))?([Tt ])?((\d{2}):(\d{2}):(\d{2})(\.\d+)?)?(([zZ])|(([\+\-])(\d{2}):(\d{2})))?)";
-		if (auto matches = std::match_results<std::string_view::iterator>{};
-			std::regex_match(beg, end, matches, std::regex{ date_time_reg }))
-		{
-			//date
-			const auto& date = matches[static_cast<std::size_t>(match_index::date)];
-			const auto& d_t_seperator = matches[static_cast<std::size_t>(match_index::date_time_seperator)];
-			const auto& time = matches[static_cast<std::size_t>(match_index::time)];
-			const auto& offset = matches[static_cast<std::size_t>(match_index::offset)];
-		
-			const auto offset_date_time = date.matched &&
-				d_t_seperator.matched &&
-				time.matched &&
-				offset.matched;
-
-			const auto local_date_time = date.matched &&
-				d_t_seperator.matched &&
-				time.matched;
-
-			const auto local_date = date.matched &&
-				!d_t_seperator.matched &&
-				!time.matched &&
-				!offset.matched;
-
-			const auto local_time = !date.matched &&
-				!d_t_seperator.matched &&
-				time.matched &&
-				!offset.matched;
-
-			if (offset_date_time)
-			{
-				const auto dt = fill_date_time<NoThrow>(matches);
-				if (dt)
-				{
-					auto odt = date_time{ *dt, false};
-					const auto& off_z = matches[static_cast<std::size_t>(match_index::off_z)];
-					if (off_z.matched)
-					{
-						// default offset
-						odt.offset_hours = {};
-						odt.offset_minutes = {};
-						odt.offset_positive = true;
-						return { value_type::date_time, odt, std::string{ str } };
-					}
-
-					const auto& off_sign = matches[static_cast<std::size_t>(match_index::off_sign)];
-					assert(off_sign.matched);
-					if (*off_sign.first == '+')
-						odt.offset_positive = true;
-					else if (*off_sign.first != '-')
-						return { value_type::bad, {}, {} };
-
-					const auto& hours = matches[static_cast<std::size_t>(match_index::off_hours)];
-					assert(hours.matched);
-					auto ret = std::from_chars(&*hours.first, &*hours.second, odt.offset_hours);
-					if (ret.ptr == &*hours.second)
-					{
-						const auto& minutes = matches[static_cast<std::size_t>(match_index::off_minues)];
-						assert(minutes.matched);
-						ret = std::from_chars(&*minutes.first, &*minutes.first + minutes.length(), odt.offset_minutes);
-						if (ret.ptr == &*minutes.first + minutes.length())
-							return { value_type::date_time, odt, std::string{ str } };
-					}
-				}
-			}
-			else if (local_date_time)
-			{
-				auto dt = fill_date_time<NoThrow>(matches);
-				if (dt)
-					return { value_type::local_date_time, *dt, std::string{ str } };
-			}
-			else if (local_date)
-			{
-				auto d = fill_date<NoThrow>(matches);
-				if (d)
-					return { value_type::local_date, *d, std::string{ str } };
-			}
-			else if (local_time)
-			{
-				auto t = fill_time<NoThrow>(matches);
-				if (t)
-					return { value_type::local_time, *t, std::string{ str } };
-			}
-		}
-
-		return { value_type::bad, {}, {} };
+			}, ret);
 	}
 
 	struct normal_tag_t {};
@@ -2014,7 +2158,8 @@ namespace another_toml
 
 				if constexpr (DoubleQuote)
 				{
-					if (!replace_escape_chars<NoThrow>(*str))
+					str = replace_escape_chars<NoThrow>(*str);
+					if (!str)
 						return false;
 				}
 			}
@@ -2036,7 +2181,8 @@ namespace another_toml
 
 			if constexpr (DoubleQuote)
 			{
-				if (!replace_escape_chars<NoThrow>(*str))
+				str = replace_escape_chars<NoThrow>(*str);
+				if (!str)
 					return false;
 			}
 
@@ -2056,7 +2202,7 @@ namespace another_toml
 
 		assert(!strm.stack.empty());
 		assert(str);
-		insert_child<NoThrow>(toml_data, strm.stack.back(), internal_node{ std::move(*str), node_type::value, value_type::string });
+		insert_child<NoThrow>(toml_data, strm.stack.back(), internal_node{ std::move(*str), node_type::value, value_type::string, string_t{ !DoubleQuote } });
 		strm.token_stream.emplace_back(token_type::value);
 
 		return true;
@@ -2091,10 +2237,10 @@ namespace another_toml
 					'(' + std::to_string(static_cast<int>(ch)) + ')' };
 			}
 
-			if (is_unicode(ch))
+			if (is_unicode_byte(ch))
 			{
 				auto u_ch = parse_unicode_char(ch, strm);
-				if (u_ch == utf8_error_char)
+				if (u_ch == unicode_error_char)
 				{
 					if constexpr (NoThrow)
 					{
@@ -2578,7 +2724,7 @@ namespace another_toml
 	template<bool NoThrow>
 	static root_node parse_toml(std::istream& strm)
 	{
-		auto toml_data = root_node::data_type{ new detail::toml_internal_data };
+		auto toml_data = root_node::data_type{ new detail::toml_internal_data{} };
 		auto& t = toml_data->tables;
 		auto p_state = parser_state{ strm };
 
@@ -2593,7 +2739,6 @@ namespace another_toml
 
 		// implicit global table
 		// always stored at index 0
-		t.emplace_back(std::string{}, node_type::table);
 		p_state.stack.emplace_back(root_table);
 		p_state.open_tables.emplace_back(root_table);
 		
