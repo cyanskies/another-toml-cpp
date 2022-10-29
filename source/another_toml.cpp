@@ -37,6 +37,7 @@ namespace another_toml
 		{
 			double value;
 			writer::float_rep rep;
+			std::uint8_t precision = 19;
 		};
 
 		struct string_t
@@ -252,6 +253,9 @@ namespace another_toml
 		{
 			auto out = std::stringstream{};
 			using base = writer::int_base;
+			if (options.simple_numerical_output)
+				i.base = base::dec;
+
 			if (i.base == base::bin)
 			{
 				// negative values are forbidden
@@ -299,13 +303,14 @@ namespace another_toml
 				return "-inf"s;
 
 			auto strm = std::ostringstream{};
-			if (d.rep == writer::float_rep::scientific)
+			if (d.rep == writer::float_rep::scientific &&
+				!options.simple_numerical_output)
 			{
-				strm << std::scientific << d.value;
+				strm << std::scientific << std::setprecision(d.precision) << d.value;
 				return strm.str();
 			}
 
-			strm << std::setprecision(19) << d.value;
+			strm << std::fixed << std::setprecision(d.precision) << d.value;
 			auto str = strm.str();
 			if (str.find('.') == std::string::npos)
 				str += ".0"s;
@@ -381,7 +386,9 @@ namespace another_toml
 		if(_data->tables[_index].type == node_type::value &&
 			_data->tables[_index].v_type != value_type::string)
 		{
-			return std::visit(to_string_visitor{ writer_options{} }, _data->tables[_index].value);
+			auto opts = writer_options{};
+			opts.simple_numerical_output = true;
+			return std::visit(to_string_visitor{ opts }, _data->tables[_index].value);
 		}
 
 		return _data->tables[_index].name;
@@ -569,6 +576,7 @@ namespace another_toml
 		auto i = _stack.back();
 		const auto t = _data->tables[i].type;
 		assert(t == node_type::table ||
+			t == node_type::inline_table ||
 			t == node_type::array_tables);
 
 		auto new_table = insert_child_table_array<false>(i, std::string{ name }, *_data);
@@ -646,9 +654,9 @@ namespace another_toml
 		return;
 	}
 
-	void writer::write_value(double value, float_rep rep)
+	void writer::write_value(double value, float_rep rep, std::uint8_t precision)
 	{
-		write_value_impl(_stack.back(), *_data, value_type::floating_point, detail::floating{ value, rep });
+		write_value_impl(_stack.back(), *_data, value_type::floating_point, detail::floating{ value, rep, precision });
 		if(_data->tables[_stack.back()].type == node_type::key) 
 			_stack.pop_back();
 		return;
@@ -701,7 +709,7 @@ namespace another_toml
 		return sstream.str();
 	}
 
-	// check if any of 'i's children are off the passed type
+	// Returns true if a table header should be written for i
 	static bool is_headered_table(index_t i, const toml_internal_data& d) noexcept
 	{
 		auto child = d.tables[i].child;
@@ -720,7 +728,8 @@ namespace another_toml
 		return false;
 	}
 
-	static std::string make_table_name(const std::vector<index_t>& nodes, const toml_internal_data& d)
+	static std::string make_table_name(const std::vector<index_t>& nodes, const toml_internal_data& d,
+		const writer_options& o)
 	{
 		assert(!empty(nodes));
 		if (nodes.empty())
@@ -734,7 +743,7 @@ namespace another_toml
 			if (empty(d.tables[*beg].name))
 				continue;
 
-			out += escape_toml_name(d.tables[*beg].name);
+			out += escape_toml_name(d.tables[*beg].name, o.ascii_output);
 			if (next(beg) != end)
 				out.push_back('.');
 		}
@@ -754,9 +763,62 @@ namespace another_toml
 		return children;
 	}
 
+	template<typename UnaryFunction>
+	void for_each_child(index_t i, const toml_internal_data& d, UnaryFunction f) 
+		noexcept(std::is_nothrow_invocable_v<UnaryFunction, const internal_node&>)
+	{
+		auto child = d.tables[i].child;
+		while (child != bad_index)
+		{
+			std::invoke(f, d.tables[child]);
+			child = d.tables[child].next;
+		}
+		return;
+	}
+
+	bool skip_table_header(index_t table, index_t child, const toml_internal_data& d)
+	{
+		if (child == bad_index)
+			return false;
+
+		auto tables = true;
+		const auto func = [&tables](const internal_node& n) noexcept {
+			if (n.type != node_type::table &&
+				n.type != node_type::array_tables)
+				tables = false;
+			return;
+		};
+
+		for_each_child(table, d, func);
+		return tables;
+	}
+
+	bool optional_newline(std::ostream& strm, std::streampos& last_newline, const writer_options& o)
+	{
+		if (strm.tellp() - last_newline > o.array_line_length)
+		{
+			strm << '\n';
+			last_newline = strm.tellp();
+			return true;
+		}
+		return false;
+	}
+
+	using indent_level_t = std::int32_t;
+
+	void optional_indentation(std::ostream& strm, indent_level_t indent, const writer_options& o)
+	{
+		if (o.indent_child_tables)
+		{
+			for (auto i = indent_level_t{}; i < indent; ++i)
+				strm << o.indent_string;
+		}
+	}
+
 	template<bool WriteOne>
 	static void write_children(std::ostream& strm, const toml_internal_data& d,
-		const writer_options& o, std::vector<index_t> stack, std::streampos& last_newline)
+		const writer_options& o, std::vector<index_t> stack, std::streampos& last_newline,
+		indent_level_t indent_level)
 	{
 		assert(!empty(stack));
 		const auto parent = stack.back();
@@ -765,14 +827,10 @@ namespace another_toml
 		auto children = get_children(parent, d);
 
 		// make sure root keys are written before child tables
-		if (parent == 0)
-		{
-			std::partition(begin(children), end(children), [&d](const index_t i) {
-				return d.tables[i].type == node_type::key ||
-					d.tables[i].type == node_type::array ||
-					d.tables[i].type == node_type::inline_table;
-				});
-		}
+		std::partition(begin(children), end(children), [&d](const index_t i) {
+			return !(d.tables[i].type == node_type::table ||
+				d.tables[i].type == node_type::array_tables);
+			});
 
 		auto beg = begin(children);
 		const auto end = std::end(children);
@@ -786,24 +844,36 @@ namespace another_toml
 				assert(parent_type == node_type::table ||
 					parent_type == node_type::array_tables);
 
-				if (last_newline != std::streampos{} &&
-					size(stack) < 2 &&
-					!o.compact_spacing)
-				{
-					strm << '\n';
-					last_newline = strm.tellp();
-				}
-
 				auto name_stack = stack;
 				name_stack.emplace_back(*beg);
+
+				// skip if all their children are also tables
+				// skip writing empty tables unless they are leafs
+				if (o.skip_empty_tables && skip_table_header(*beg, c_ref.child, d))
+				{
+					write_children<false>(strm, d, o, name_stack, last_newline, indent_level);
+					break;
+				}
+
+				const auto indent = indent_level + 1;
 				if (parent_type != node_type::array_tables && 
 					(is_headered_table(*beg, d) || c_ref.child == bad_index))
 				{
-					strm << '[' << make_table_name(name_stack, d) << "]\n"s;
+					if (last_newline != std::streampos{} &&
+						size(stack) < 2 &&
+						!o.compact_spacing)
+					{
+						strm << '\n';
+						last_newline = strm.tellp();
+					}
+
+					optional_indentation(strm, indent, o);
+
+					strm << '[' << make_table_name(name_stack, d, o) << "]\n"s;
 					last_newline = strm.tellp();
 				}
 
-				write_children<false>(strm, d, o, std::move(name_stack), last_newline);
+				write_children<false>(strm, d, o, std::move(name_stack), last_newline, indent);
 			} break;
 			case node_type::array:
 			{
@@ -813,7 +883,9 @@ namespace another_toml
 
 				if (parent_type != node_type::array)
 				{
-					strm << c_ref.name;
+					optional_indentation(strm, indent_level, o);
+
+					strm << escape_toml_name(c_ref.name, o.ascii_output);
 					if (o.compact_spacing)
 						strm << '=';
 					else
@@ -824,13 +896,10 @@ namespace another_toml
 				if (!o.compact_spacing)
 					strm << ' ';
 
-				if (strm.tellp() - last_newline > o.array_line_length)
-				{
-					strm << '\n';
-					last_newline = strm.tellp();
-				}
+				if (optional_newline(strm, last_newline, o))
+					optional_indentation(strm, indent_level, o);
 
-				write_children<false>(strm, d, o, { *beg }, last_newline);
+				write_children<false>(strm, d, o, { *beg }, last_newline, indent_level);
 
 				strm << ']';
 				if (parent_type == node_type::table)
@@ -848,13 +917,7 @@ namespace another_toml
 			} break;
 			case node_type::array_tables:
 			{
-				if (last_newline != std::streampos{} &&
-					size(stack) < 2 &&
-					!o.compact_spacing)
-				{
-					strm << '\n';
-					last_newline = strm.tellp();
-				}
+				const auto indent = indent_level + 1;
 
 				auto name_stack = stack;
 				name_stack.emplace_back(*beg);
@@ -862,10 +925,20 @@ namespace another_toml
 				const auto child_end = std::end(child_tables);
 				for(auto beg = begin(child_tables); beg != child_end; ++beg)
 				{
-					strm << "[["s << make_table_name(name_stack, d) << "]]\n"s;
+					if (last_newline != std::streampos{} &&
+						size(stack) < 2 &&
+						!o.compact_spacing)
+					{
+						strm << '\n';
+						last_newline = strm.tellp();
+					}
+
+					optional_indentation(strm, indent, o);
+
+					strm << "[["s << make_table_name(name_stack, d, o) << "]]\n"s;
 					last_newline = strm.tellp();
 					name_stack.emplace_back(*beg);
-					write_children<false>(strm, d, o, name_stack, last_newline);
+					write_children<false>(strm, d, o, name_stack, last_newline, indent);
 					name_stack.pop_back();
 				}
 			} break;
@@ -873,15 +946,18 @@ namespace another_toml
 			{
 				assert(parent_type == node_type::table ||
 					parent_type == node_type::inline_table);
+
+				optional_indentation(strm, indent_level, o);
+
 				//key_name
-				strm << escape_toml_name(c_ref.name);
+				strm << escape_toml_name(c_ref.name, o.ascii_output);
 				if (!o.compact_spacing)
 					strm << " = "s;
 				else
 					strm << '=';
 
 				//value
-				write_children<true>(strm, d, o, { *beg }, last_newline);
+				write_children<true>(strm, d, o, { *beg }, last_newline, indent_level);
 
 				if (parent_type == node_type::inline_table)
 				{
@@ -897,6 +973,9 @@ namespace another_toml
 						else
 							strm << ' ';
 					}
+
+					//TOML1.x allow newlines in inline tables just like arrays
+					//optional_newline(strm, last_newline, o);
 				}
 				else
 				{
@@ -912,22 +991,24 @@ namespace another_toml
 
 				if (parent_type != node_type::array)
 				{
-					strm << c_ref.name;
+					optional_indentation(strm, indent_level, o);
+
+					strm << escape_toml_name(c_ref.name, o.ascii_output);
 					if (o.compact_spacing)
-						strm << " = ";
+						strm << " = "s;
 					else
 						strm << '=';
 				}
 
-				if (o.compact_spacing)
-					strm << "{ ";
+				if (!o.compact_spacing)
+					strm << "{ "s;
 				else
 					strm << '{';
 
-				write_children<false>(strm, d, o, { *beg }, last_newline);
+				write_children<false>(strm, d, o, { *beg }, last_newline, indent_level);
 
-				if (o.compact_spacing)
-					strm << "} ";
+				if (!o.compact_spacing)
+					strm << "} "s;
 				else
 					strm << '}';
 
@@ -937,7 +1018,9 @@ namespace another_toml
 					if (o.compact_spacing)
 						strm << ',';
 					else
-						strm << ", ";
+						strm << ", "s;
+
+					optional_newline(strm, last_newline, o);
 				}
 			} break;
 			case node_type::value:
@@ -945,10 +1028,13 @@ namespace another_toml
 				if (c_ref.v_type == value_type::string)
 				{
 					const auto& string_extra = std::get<string_t>(c_ref.value);
-					if (!string_extra.literal)
+					if (!string_extra.literal || 
+						// if we want ascii output, all unicode chars 
+						// must be escaped in doublequoted strings
+						(o.ascii_output && contains_unicode(c_ref.name)))
 					{
 						strm << '\"';
-						const auto str = to_escaped_string(c_ref.name);
+						const auto str = o.ascii_output ? to_escaped_string2(c_ref.name) : to_escaped_string(c_ref.name);
 						strm.write(data(str), size(str));
 						strm << '\"';
 					}
@@ -983,11 +1069,7 @@ namespace another_toml
 							strm << ' ';
 					}
 
-					if (strm.tellp() - last_newline > o.array_line_length)
-					{
-						strm << '\n';
-						last_newline = strm.tellp();
-					}
+					optional_newline(strm, last_newline, o);
 				}
 				
 				if constexpr (WriteOne)
@@ -1005,8 +1087,15 @@ namespace another_toml
 
 	std::ostream& operator<<(std::ostream& o, const writer& w)
 	{
+		//write the byte order mark
+		if (w._opts.utf8_bom)
+		{
+			for (const auto ch : utf8_bom)
+				o.put(static_cast<char>(ch));
+		}
+
 		auto pos = o.tellp();
-		write_children<false>(o, *w._data, w._opts, { 0 }, pos);
+		write_children<false>(o, *w._data, w._opts, { 0 }, pos, -1);
 		
 		return o;
 	}

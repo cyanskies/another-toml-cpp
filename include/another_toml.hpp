@@ -272,10 +272,25 @@ namespace another_toml
 	//global writer options
 	struct writer_options
 	{
-		// if true, avoids unrequired whitespace eg: name = value -> name=value
-		bool compact_spacing = false;
 		// how many characters before splitting next array element to new line
 		int array_line_length = 80;
+		// if true, avoids unrequired whitespace eg: name = value -> name=value
+		bool compact_spacing = false;
+		// add an indentation level for each child table
+		bool indent_child_tables = true;
+		// added to the start of an indented line(may be repeated multiple times)
+		// default is 3 spaces, only has an effect if indent_child_tables = true
+		std::string indent_string = { "   " };
+		// output only ascii characters(unicode sequences are escaped)
+		bool ascii_output = false;
+		// skip writing redundant table headers
+		// eg. for [a.b.c], [a] and [a.b] only need to be written if they have keys in them
+		bool skip_empty_tables = true;
+		// ignore per value override specifiers where possible
+		// (eg. all ints output in base 10, floats in normal mode rather than scientific)
+		bool simple_numerical_output = false;
+		// write a utf-8 BOM into the start of the stream
+		bool utf8_bom = false;
 	};
 
 	class writer
@@ -323,7 +338,7 @@ namespace another_toml
 		// pass literal string tag to mark a string as being a literal
 		void write_value(std::string value, literal_t);
 
-		enum class int_base
+		enum class int_base : std::uint8_t
 		{
 			dec,
 			hex,
@@ -333,13 +348,13 @@ namespace another_toml
 
 		void write_value(std::int64_t value, int_base = int_base::dec);
 
-		enum class float_rep
+		enum class float_rep : std::uint8_t
 		{
 			normal,
 			scientific
 		};
 
-		void write_value(double value, float_rep = float_rep::normal);
+		void write_value(double value, float_rep = float_rep::normal, std::uint8_t precision = 6);
 		void write_value(bool value);
 		void write_value(date_time value);
 		void write_value(local_date_time value);

@@ -1,5 +1,3 @@
-#include "string_util.hpp"
-
 namespace another_toml
 {
 	constexpr bool is_unicode_start(char c) noexcept

@@ -429,12 +429,14 @@ namespace another_toml
 		return *to_escaped_string<false, true>(str);
 	}
 
-	std::string escape_toml_name(std::string_view s)
+	std::string escape_toml_name(std::string_view s, bool ascii)
 	{
 		if (empty(s))
 			return "\"\""s;
 
-		auto out = to_escaped_string2(s);
+		auto out = ascii ?
+			to_escaped_string2(s) : 
+			to_escaped_string(s);
 		if (out != s ||
 			contains_unicode(s) ||
 			out.find(' ') != std::string::npos ||

@@ -39,7 +39,8 @@ namespace another_toml
 
 	// Escapes and adds quotations around str so that it can be used
 	// as a valid toml name(keys, tables)
-	std::string escape_toml_name(std::string_view str);
+	// set ascii_output to output in only ascii characters, unicode will be escaped
+	std::string escape_toml_name(std::string_view str, bool ascii_ouput = false);
 
 	// returns true if any character was part of a unicode sequence
 	bool contains_unicode(std::string_view s) noexcept;
