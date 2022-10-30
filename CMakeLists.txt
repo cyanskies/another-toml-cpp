@@ -4,7 +4,7 @@ cmake_policy(SET CMP0048 NEW)
 project(another-toml-cpp VERSION 0.1 LANGUAGES CXX)
 
 add_library(${PROJECT_NAME})
-set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 20)
+set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
 
 if(BUILD_SHARED_LIBS)
     set_target_properties(${PROJECT_NAME} PROPERTIES DEBUG_POSTFIX -d)

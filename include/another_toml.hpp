@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-// library for parsing toml1.0 documents
+// library for parsing toml 1.0 documents
 
 namespace another_toml
 {
@@ -20,6 +20,8 @@ namespace another_toml
 		using std::runtime_error::runtime_error;
 	};
 
+	// thrown from unicode handling functions(in string_util.hpp)
+	// also thrown while parsing or writing unicode text
 	class unicode_error : public parser_error
 	{
 	public:
@@ -47,6 +49,8 @@ namespace another_toml
 		using parser_error::parser_error;
 	};
 
+	//thrown when calling node::as_int... if the type
+	// stored doesn't match the function return type
 	class wrong_type : public parser_error
 	{
 	public:
@@ -54,10 +58,10 @@ namespace another_toml
 	};
 
 	// thrown if an invalid raw unicode or escaped unicode char was found
-	class invalid_unicode_char : public parser_error
+	class invalid_unicode_char : public unicode_error
 	{
 	public:
-		using parser_error::parser_error;
+		using unicode_error::unicode_error;
 	};
 
 	namespace detail
@@ -150,6 +154,8 @@ namespace another_toml
 		// this will return false for nodes returned by the fucntions:
 		//	get_child() for a node that has no children
 		// if you use iterator/ranges to access child nodes then you don't have to worry about this.
+		// NOTE: the non-throwing parse functions return values should be checked for this
+		//		before use
 		bool good() const noexcept;
 
 		// test node type
@@ -160,6 +166,8 @@ namespace another_toml
 		bool value() const noexcept;
 		bool inline_table() const noexcept;
 
+		// if this is a value node, this returns
+		// the type of the stored value
 		value_type type() const noexcept;
 
 		// get the nodes children
@@ -170,11 +178,12 @@ namespace another_toml
 		//		for a key: anonymous table, value, array(of arrays of values)
 		bool has_children() const noexcept;
 		std::vector<basic_node<>> get_children() const;
-		basic_node<> get_child() const;
+		basic_node<> get_first_child() const;
 
 		// iterator based interface
 		node_iterator begin() const noexcept;
 		node_iterator end() const noexcept;
+		// returns the number of child nodes
 		std::size_t size() const noexcept;
 
 		std::string as_string() const;
@@ -262,12 +271,19 @@ namespace another_toml
 	constexpr auto no_throw = detail::no_throw_t{};
 
 	root_node parse(std::string_view toml);
+	root_node parse(const std::string& toml);
+	root_node parse(const char* toml);
 	root_node parse(std::istream&);
-	//node parse(const std::filesystem::path& filename);
+	// NOTE: user must handle std exceptions related to file reading
+	// eg. std::filesystem_error and its children
+	root_node parse(const std::filesystem::path& filename);
 
-	root_node parse(std::string_view toml, detail::no_throw_t) noexcept;
-	root_node parse(std::istream&, detail::no_throw_t) noexcept;
-	//node parse(const std::filesystem::path& filename, detail::no_throw_t) noexcept;
+	// if root_node::good() == false, check std::cerr for error messages
+	root_node parse(std::string_view toml, detail::no_throw_t);
+	root_node parse(const std::string& toml, detail::no_throw_t);
+	root_node parse(const char* toml, detail::no_throw_t);
+	root_node parse(std::istream&, detail::no_throw_t);
+	root_node parse(const std::filesystem::path& filename, detail::no_throw_t);
 
 	//global writer options
 	struct writer_options
@@ -279,8 +295,8 @@ namespace another_toml
 		// add an indentation level for each child table
 		bool indent_child_tables = true;
 		// added to the start of an indented line(may be repeated multiple times)
-		// default is 3 spaces, only has an effect if indent_child_tables = true
-		std::string indent_string = { "   " };
+		// only has an effect if indent_child_tables = true
+		std::string indent_string = { '\t' };
 		// output only ascii characters(unicode sequences are escaped)
 		bool ascii_output = false;
 		// skip writing redundant table headers
@@ -289,7 +305,7 @@ namespace another_toml
 		// ignore per value override specifiers where possible
 		// (eg. all ints output in base 10, floats in normal mode rather than scientific)
 		bool simple_numerical_output = false;
-		// write a utf-8 BOM into the start of the stream
+		// write a utf-8 BOM into the start of the stream(not required)
 		bool utf8_bom = false;
 	};
 

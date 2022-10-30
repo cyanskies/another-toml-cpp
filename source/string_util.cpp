@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <codecvt>
 #include <iostream>
 #include <locale>
@@ -278,6 +279,7 @@ namespace another_toml
 		return {};
 	}
 
+	// removes underscores and leading positive signs from sv
 	std::string remove_underscores(std::string_view sv)
 	{
 		auto str = std::string{ sv };
@@ -291,8 +293,10 @@ namespace another_toml
 		return str;
 	}
 
-	std::optional<parse_float_string_return> parse_float_string(std::string_view str)
+	parse_float_string_return parse_float_string(std::string_view str)
 	{
+		using error_t = parse_float_string_return::error_t;
+
 		//	inf, +inf, -inf
 		if (str == "inf"sv || str == "+inf"sv)
 			return parse_float_string_return{ std::numeric_limits<double>::infinity() };
@@ -301,7 +305,6 @@ namespace another_toml
 		//	nan, +nan, -nan
 		if (str == "nan"sv || str == "+nan"sv || str == "-nan"sv)
 			return parse_float_string_return{ std::numeric_limits<double>::quiet_NaN() };
-
 
 		constexpr auto float_reg = R"(^[\+\-]?([1-9]+(_?([\d])+)*|0)(\.[\d]+(_?[\d])*)?([eE][\+\-]?[\d]+(_?[\d]+)?)?$)";
 		if (auto matches = std::match_results<std::string_view::iterator>{};
@@ -320,9 +323,11 @@ namespace another_toml
 				if (matches[scientific_e].matched)
 					rep = writer::float_rep::scientific;
 				return parse_float_string_return{ floating_val, rep };
-			}				
+			}
+			else if (ret.ec == std::errc::result_out_of_range)
+				return parse_float_string_return{ {}, {}, error_t::out_of_range };
 		}
-		return {};
+		return parse_float_string_return{ {}, {}, error_t::bad };
 	}
 
 	namespace
@@ -375,6 +380,8 @@ namespace another_toml
 				out += "\\t"s;
 				continue;
 			case U'\u007F': // DEL 127
+				// TOML 1.1
+				// out += "\\x7F"s;
 				out += "\\u007F"s;
 				continue;
 			}
@@ -447,21 +454,21 @@ namespace another_toml
 		return out;
 	}
 
-	constexpr auto escape_codes_raw = std::array{
-		"\\b"sv, "\\t"sv, "\\n"sv, "\\f"sv, "\\r"sv, "\\\""sv, "\\\\"sv // "\\uXXXX" "\\UXXXXXXXX"
-	};
+	//constexpr auto escape_codes_raw = std::array{
+	//	"\\b"sv, "\\t"sv, "\\n"sv, "\\f"sv, "\\r"sv, "\\\""sv, "\\\\"sv // "\\uXXXX" "\\UXXXXXXXX"
+	//};
 
-	constexpr auto escape_codes_char = std::array{
-		'\b', '\t', '\n', '\f', '\r', '\"', '\\' // "\\uXXXX" "\\UXXXXXXXX"
-	};
+	//constexpr auto escape_codes_char = std::array{
+	//	'\b', '\t', '\n', '\f', '\r', '\"', '\\' // "\\uXXXX" "\\UXXXXXXXX"
+	//};
 
 	// replace string chars with proper escape codes
 	template<bool NoThrow>
 	std::optional<std::string> replace_escape_chars(std::string_view str)
 	{
-		static_assert(size(escape_codes_raw) == size(escape_codes_char));
+		/*static_assert(size(escape_codes_raw) == size(escape_codes_char));
 		constexpr auto codes_size = size(escape_codes_raw);
-		auto s = std::string{ str };
+		*/auto s = std::string{ str };
 		auto pos = std::size_t{};
 		while (pos < size(s))
 		{
@@ -474,91 +481,115 @@ namespace another_toml
 			{
 				if constexpr (NoThrow)
 				{
-					std::cerr << "Invalid escape code: "s << std::string_view{ &s[code_beg], &s[size(s) - 1] } << '\n';
+					std::cerr << "Invalid escape code: unmatched '\'\n"s;
 					return {};
 				}
 				else
-					throw unicode_error{ "Invalid escape code: "s + std::string{ &s[code_beg], &s[size(s) - 1] } };
+					throw unicode_error{ "Invalid escape code: unmatched '\'\n"s };
 			}
 
 			auto code_end = code_mid + 1;
 			auto found_code = false;
-			// TODO: replace loop with switch
-			for (auto i = std::size_t{}; i < codes_size; ++i)
+
+			switch (s[code_mid])
 			{
-				if (escape_codes_raw[i] == std::string_view{ &s[code_beg], &s[code_end] })
-				{
-					s.replace(code_beg, 2, 1, escape_codes_char[i]);
-					pos = code_beg;
-					found_code = true;
-					break;
-				}
+			case 'b':
+				s.replace(code_beg, 2, 1, '\b');
+				pos = code_beg + 1;
+				continue;
+			case 'n':
+				s.replace(code_beg, 2, 1, '\n');
+				pos = code_beg + 1;
+				continue;
+			case 'f':
+				s.replace(code_beg, 2, 1, '\f');
+				pos = code_beg + 1;
+				continue;
+			case 'r':
+				s.replace(code_beg, 2, 1, '\r');
+				pos = code_beg + 1;
+				continue;
+			case '\"':
+				s.replace(code_beg, 2, 1, '\"');
+				pos = code_beg + 1;
+				continue;
+			case U'\\':
+				s.replace(code_beg, 2, 1, '\\');
+				pos = code_beg + 1;
+				continue;
+			case 't':
+				s.replace(code_beg, 2, 1, '\t');
+				pos = code_beg + 1;
+				continue;
 			}
 
-			if (!found_code)
+			// Unicode chars are 1-4 bytes, the escape code is at least 6 chars
+			// so the resulting string will always be shorter, string won't have
+			// to alloc.
+			if (const auto escape_char = s[code_mid];
+				escape_char == 'u' || escape_char == 'U')
 			{
-				// Unicode chars are 1-4 bytes, the escape code is at least 6 chars
-				// so the resulting string will always be shorter, string won't have
-				// to alloc.
-				if (const auto unicode_char = s[code_mid];
-					unicode_char == 'u' || unicode_char == 'U')
+				if (escape_char == 'u') // \uHHHH
+					code_end = code_mid + 5;
+				else if (escape_char == 'U') // \UHHHHHHHH
+					code_end = code_mid + 9;
+				// TOML 1.1
+				//else if (escape_char == 'x') // \xHH
+				//	code_end = code_mid + 3;
+
+				const auto escape_size = code_end - code_beg;
+
+				if (size(s) < code_end)
 				{
-					if (s[code_mid] == 'u') // \uXXXX
-						code_end = code_mid + 5;
-					else if (s[code_mid] == 'U') // \UXXXXXXXX
-						code_end = code_mid + 9;
-
-					if (size(s) < code_end)
-					{
-						if constexpr (NoThrow)
-						{
-							std::cerr << "Invalid unicode escape code: "s << std::string_view{ &s[code_beg], &s[size(s) - 1] } << '\n';
-							return {};
-						}
-						else
-							throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], &s[size(s) - 1] } };
-					}
-
-					auto int_val = int{};
-					const auto result = std::from_chars(&s[code_mid + 1], &s[code_end], int_val, 16);
-					static_assert(sizeof(int) <= sizeof(char32_t));
-					if (result.ptr != &s[code_end] ||
-						result.ec == std::errc::result_out_of_range ||
-						!valid_u32_char(static_cast<char32_t>(int_val)))
-					{
-						if constexpr (NoThrow)
-						{
-							std::cerr << "Invalid unicode escape code: "s << std::string_view{ &s[code_beg], &s[code_end] } << '\n';
-							return {};
-						}
-						else
-							throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], &s[code_end] } };
-					}
-
-					const auto u8 = to_u8_str<NoThrow>(static_cast<char32_t>(int_val));
 					if constexpr (NoThrow)
 					{
-						if (!u8)
-						{
-							std::cerr << "Failed to convert unicode escape code to utf-8: "s << std::string_view{ &s[code_beg], &s[code_end] } << '\n';
-							return {};
-						}
+						std::cerr << "Invalid unicode escape code: "s << std::string_view{ &s[code_beg], escape_size } << '\n';
+						return {};
 					}
-
-					assert(u8);
-					s.replace(code_beg, code_end - code_beg, *u8);
-					pos = code_beg + size(*u8);
-					continue;
+					else
+						throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], escape_size } };
 				}
 
+				auto int_val = std::uint_least32_t{};
+				const auto result = std::from_chars(&s[code_mid + 1], &s[code_end], int_val, 16);
+				static_assert(sizeof(std::uint_least32_t) <= sizeof(char32_t));
+				const auto unicode_char = static_cast<char32_t>(int_val);
+				if (result.ptr != &s[code_end] ||
+					result.ec == std::errc::result_out_of_range ||
+					!valid_u32_char(unicode_char))
+				{
+					if constexpr (NoThrow)
+					{
+						std::cerr << "Invalid unicode escape code: "s << std::string_view{ &s[code_beg], escape_size } << '\n';
+						return {};
+					}
+					else
+						throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], escape_size } };
+				}
+
+				const auto u8 = to_u8_str<NoThrow>(unicode_char);
 				if constexpr (NoThrow)
 				{
-					std::cerr << "Illigal escape code in quoted string: \"\\"s << s[code_mid] << "\"\n"s;
-					return {};
+					if (!u8)
+					{
+						std::cerr << "Failed to convert unicode escape code to utf-8: "s << std::string_view{ &s[code_beg], escape_size } << '\n';
+						return {};
+					}
 				}
-				else
-					throw unicode_error{ "Illigal escape code in quoted string: \"\\"s + s[code_mid] + "\""s };
+
+				assert(u8);
+				s.replace(code_beg, escape_size, *u8);
+				pos = code_beg + size(*u8);
+				continue;
 			}
+
+			if constexpr (NoThrow)
+			{
+				std::cerr << "Illigal escape code in quoted string: \"\\"s << s[code_mid] << "\"\n"s;
+				return {};
+			}
+			else
+				throw unicode_error{ "Illigal escape code in quoted string: \"\\"s + s[code_mid] + "\""s };
 
 			++pos;
 		}
@@ -603,7 +634,7 @@ namespace another_toml
 		return true;
 	}
 
-	char32_t unicode_u8_to_u32(std::string_view str)
+	char32_t unicode_u8_to_u32(std::string_view str) noexcept
 	{
 		if (empty(str))
 			return {};

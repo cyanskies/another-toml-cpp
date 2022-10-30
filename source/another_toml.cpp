@@ -3,10 +3,9 @@
 #include <array>
 #include <bitset>
 #include <cassert>
-#include <codecvt>
+#include <charconv>
 #include <fstream>
 #include <iostream>
-#include <ranges>
 #include <regex>
 #include <sstream>
 #include <string_view>
@@ -73,9 +72,7 @@ namespace another_toml
 
 		struct toml_internal_data
 		{
-			// TODO: not tables: this is all nodes
-			//		rename to nodes
-			std::vector<internal_node> tables = { internal_node{{}, node_type::table} };
+			std::vector<internal_node> nodes = { internal_node{{}, node_type::table} };
 #ifndef NDEBUG
 			std::string input_log;
 #endif
@@ -88,8 +85,8 @@ namespace another_toml
 
 		index_t get_next(const toml_internal_data& d, const index_t i) noexcept
 		{
-			assert(size(d.tables) > i);
-			return d.tables[i].next;
+			assert(size(d.nodes) > i);
+			return d.nodes[i].next;
 		}
 	}
 
@@ -101,11 +98,11 @@ namespace another_toml
 	{
 		assert(p != bad_index);
 		
-		const auto &parent = d.tables[p];
+		const auto &parent = d.nodes[p];
 		auto table = parent.child;
 		while (table != bad_index)
 		{
-			auto& t = d.tables[table];
+			auto& t = d.nodes[table];
 			if (t.name == n)
 				return table;
 			table = t.next;
@@ -119,63 +116,63 @@ namespace another_toml
 	bool basic_node<R>::good() const noexcept
 	{
 		return _data && (_index != bad_index ||
-			node_type::bad_type == _data->tables[_index].type);
+			node_type::bad_type == _data->nodes[_index].type);
 	}
 
 	// test node type
 	template<bool R>
 	bool basic_node<R>::table() const noexcept
 	{
-		return node_type::table == _data->tables[_index].type;
+		return node_type::table == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::array() const noexcept
 	{
-		return node_type::array == _data->tables[_index].type;
+		return node_type::array == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::array_table() const noexcept
 	{
-		return node_type::array_tables == _data->tables[_index].type;
+		return node_type::array_tables == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::key() const noexcept
 	{
-		return node_type::key == _data->tables[_index].type;
+		return node_type::key == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::value() const noexcept
 	{
-		return node_type::value == _data->tables[_index].type;
+		return node_type::value == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::inline_table() const noexcept
 	{
-		return node_type::inline_table == _data->tables[_index].type;
+		return node_type::inline_table == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	value_type basic_node<R>::type() const noexcept
 	{
-		return _data->tables[_index].v_type;
+		return _data->nodes[_index].v_type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::has_children() const noexcept
 	{
-		return _data->tables[_index].child != bad_index;
+		return _data->nodes[_index].child != bad_index;
 	}
 
 	template<bool R>
 	std::vector<basic_node<>> basic_node<R>::get_children() const
 	{
 		auto out = std::vector<basic_node<>>{};
-		auto child = _data->tables[_index].child;
+		auto child = _data->nodes[_index].child;
 		while (child != bad_index)
 		{
 			if constexpr (R)
@@ -183,27 +180,27 @@ namespace another_toml
 			else	
 				out.emplace_back(basic_node<>{ _data, child });
 
-			child = _data->tables[child].next;
+			child = _data->nodes[child].next;
 		}
 		return out;
 	}
 
 	template<>
-	basic_node<> basic_node<true>::get_child() const
+	basic_node<> basic_node<true>::get_first_child() const
 	{
-		return basic_node<>{ _data.get(), _data->tables[_index].child};
+		return basic_node<>{ _data.get(), _data->nodes[_index].child};
 	}
 
 	template<>
-	basic_node<> basic_node<>::get_child() const
+	basic_node<> basic_node<>::get_first_child() const
 	{
-		return basic_node<>{ _data, _data->tables[_index].child};
+		return basic_node<>{ _data, _data->nodes[_index].child};
 	}
 
 	template<bool R>
 	node_iterator basic_node<R>::begin() const noexcept
 	{
-		const auto child = _data->tables[_index].child;
+		const auto child = _data->nodes[_index].child;
 		if (child != bad_index)
 		{
 			if constexpr (R)
@@ -225,11 +222,11 @@ namespace another_toml
 	std::size_t basic_node<R>::size() const noexcept
 	{
 		auto size = std::size_t{};
-		auto child = _data->tables[_index].child;
+		auto child = _data->nodes[_index].child;
 		while (child != bad_index)
 		{
 			++size;
-			child = _data->tables[child].next;
+			child = _data->nodes[child].next;
 		}
 		return size;
 	}
@@ -265,7 +262,11 @@ namespace another_toml
 				auto end = std::end(bin);
 				while (beg != end && *beg == '0')
 					++beg;
-				out << "0b"s << std::string_view{ beg, end };
+				const auto size = std::distance(beg, end);
+				if (size < 1)
+					out << "0b0"s;
+				else
+					out << "0b"s << std::string_view{ &*beg, static_cast<std::size_t>(size) };
 				return out.str();
 			}
 			else
@@ -354,6 +355,7 @@ namespace another_toml
 			strm << std::setfill('0');
 			strm << std::setw(2) << static_cast<uint16_t>(v.hours);
 			strm << ':' << std::setw(2) << static_cast<uint16_t>(v.minutes);
+			// TOML 1.1 optional seconds
 			strm << ':' << std::setw(2) << static_cast<uint16_t>(v.seconds);
 			if (v.seconds_frac != 0.f)
 			{
@@ -368,6 +370,7 @@ namespace another_toml
 		std::string operator()(local_date_time v)
 		{
 			auto out = this->operator()(v.date);
+			// TODO: make this configurable
 			out.push_back('T');
 			out += this->operator()(v.time);
 			return out;
@@ -383,15 +386,15 @@ namespace another_toml
 	template<bool R>
 	std::string basic_node<R>::as_string() const
 	{
-		if(_data->tables[_index].type == node_type::value &&
-			_data->tables[_index].v_type != value_type::string)
+		if(_data->nodes[_index].type == node_type::value &&
+			_data->nodes[_index].v_type != value_type::string)
 		{
 			auto opts = writer_options{};
 			opts.simple_numerical_output = true;
-			return std::visit(to_string_visitor{ opts }, _data->tables[_index].value);
+			return std::visit(to_string_visitor{ opts }, _data->nodes[_index].value);
 		}
 
-		return _data->tables[_index].name;
+		return _data->nodes[_index].name;
 	}
 
 	template<bool R>
@@ -399,7 +402,7 @@ namespace another_toml
 	{
 		try
 		{
-			const auto integral = std::get<detail::integral>(_data->tables[_index].value);
+			const auto integral = std::get<detail::integral>(_data->nodes[_index].value);
 			return integral.value;
 		}
 		catch (const std::bad_variant_access& e)
@@ -413,7 +416,7 @@ namespace another_toml
 	{
 		try
 		{
-			return std::get<floating>(_data->tables[_index].value).value;
+			return std::get<floating>(_data->nodes[_index].value).value;
 		}
 		catch (const std::bad_variant_access& e)
 		{
@@ -426,7 +429,7 @@ namespace another_toml
 	{
 		try
 		{
-			return std::get<bool>(_data->tables[_index].value);
+			return std::get<bool>(_data->nodes[_index].value);
 		}
 		catch (const std::bad_variant_access& e)
 		{
@@ -439,7 +442,7 @@ namespace another_toml
 	{
 		try
 		{
-			return std::get<date_time>(_data->tables[_index].value);
+			return std::get<date_time>(_data->nodes[_index].value);
 		}
 		catch (const std::bad_variant_access& e)
 		{
@@ -452,7 +455,7 @@ namespace another_toml
 	{
 		try 
 		{
-			return std::get<local_date_time>(_data->tables[_index].value);
+			return std::get<local_date_time>(_data->nodes[_index].value);
 		}
 		catch (const std::bad_variant_access& e)
 		{
@@ -465,7 +468,7 @@ namespace another_toml
 	{
 		try
 		{
-			return std::get<date>(_data->tables[_index].value);
+			return std::get<date>(_data->nodes[_index].value);
 		}
 		catch (const std::bad_variant_access& e)
 		{
@@ -478,7 +481,7 @@ namespace another_toml
 	{
 		try
 		{
-			return std::get<time>(_data->tables[_index].value);
+			return std::get<time>(_data->nodes[_index].value);
 		}
 		catch (const std::bad_variant_access& e)
 		{
@@ -505,7 +508,7 @@ namespace another_toml
 	void writer::begin_table(std::string_view table_name)
 	{
 		auto i = _stack.back();
-		const auto t = _data->tables[i].type;
+		const auto t = _data->nodes[i].type;
 		assert(t == node_type::table ||
 			t == node_type::inline_table ||
 			t == node_type::array ||
@@ -520,7 +523,7 @@ namespace another_toml
 	{
 		assert(!empty(_stack));
 		auto i = _stack.back();
-		assert(_data->tables[i].type == node_type::table);
+		assert(_data->nodes[i].type == node_type::table);
 		_stack.pop_back();
 		return;
 	}
@@ -528,7 +531,7 @@ namespace another_toml
 	void writer::begin_array(std::string_view name)
 	{
 		auto i = _stack.back();
-		const auto t = _data->tables[i].type;
+		const auto t = _data->nodes[i].type;
 		assert(t == node_type::table ||
 			t == node_type::inline_table ||
 			t == node_type::array);
@@ -543,7 +546,7 @@ namespace another_toml
 	{
 		assert(!empty(_stack));
 		auto i = _stack.back();
-		assert(_data->tables[i].type == node_type::array);
+		assert(_data->nodes[i].type == node_type::array);
 		_stack.pop_back();
 		return;
 	}
@@ -551,7 +554,7 @@ namespace another_toml
 	void writer::begin_inline_table(std::string_view name)
 	{
 		auto i = _stack.back();
-		const auto t = _data->tables[i].type;
+		const auto t = _data->nodes[i].type;
 		assert(t == node_type::table ||
 			t == node_type::array ||
 			t == node_type::inline_table);
@@ -566,7 +569,7 @@ namespace another_toml
 	{
 		assert(!empty(_stack));
 		auto i = _stack.back();
-		assert(_data->tables[i].type == node_type::inline_table);
+		assert(_data->nodes[i].type == node_type::inline_table);
 		_stack.pop_back();
 		return;
 	}
@@ -574,7 +577,7 @@ namespace another_toml
 	void writer::begin_array_tables(std::string_view name)
 	{
 		auto i = _stack.back();
-		const auto t = _data->tables[i].type;
+		const auto t = _data->nodes[i].type;
 		assert(t == node_type::table ||
 			t == node_type::inline_table ||
 			t == node_type::array_tables);
@@ -588,7 +591,7 @@ namespace another_toml
 	{
 		assert(!empty(_stack));
 		auto i = _stack.back();
-		assert(_data->tables[i].type == node_type::table);
+		assert(_data->nodes[i].type == node_type::table);
 		_stack.pop_back();
 		return;
 	}
@@ -597,7 +600,7 @@ namespace another_toml
 	void writer::write_key(std::string_view name)
 	{
 		auto i = _stack.back();
-		const auto t = _data->tables[i].type;
+		const auto t = _data->nodes[i].type;
 		assert(t == node_type::table ||
 			t == node_type::inline_table);
 
@@ -616,7 +619,7 @@ namespace another_toml
 	template<typename Value>
 	static index_t write_value_impl(index_t parent, toml_internal_data& d, value_type ty, Value v)
 	{
-		const auto t = d.tables[parent].type;
+		const auto t = d.nodes[parent].type;
 		assert(t == node_type::key ||
 			t == node_type::array);
 
@@ -633,7 +636,7 @@ namespace another_toml
 	void writer::write_value(std::string value)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::move(value), false });
-		if (_data->tables[_stack.back()].type == node_type::key)
+		if (_data->nodes[_stack.back()].type == node_type::key)
 			_stack.pop_back();
 		return;
 	}
@@ -641,7 +644,7 @@ namespace another_toml
 	void writer::write_value(std::string value, literal_t)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::move(value), true });
-		if (_data->tables[_stack.back()].type == node_type::key)
+		if (_data->nodes[_stack.back()].type == node_type::key)
 			_stack.pop_back();
 		return;
 	}
@@ -649,7 +652,7 @@ namespace another_toml
 	void writer::write_value(std::int64_t value, int_base base)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::integer, detail::integral{ value, base });
-		if(_data->tables[_stack.back()].type == node_type::key)
+		if(_data->nodes[_stack.back()].type == node_type::key)
 			_stack.pop_back(); 
 		return;
 	}
@@ -657,7 +660,7 @@ namespace another_toml
 	void writer::write_value(double value, float_rep rep, std::uint8_t precision)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::floating_point, detail::floating{ value, rep, precision });
-		if(_data->tables[_stack.back()].type == node_type::key) 
+		if(_data->nodes[_stack.back()].type == node_type::key) 
 			_stack.pop_back();
 		return;
 	}
@@ -665,7 +668,7 @@ namespace another_toml
 	void writer::write_value(bool value)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::boolean, std::move(value));
-		if(_data->tables[_stack.back()].type == node_type::key) 
+		if(_data->nodes[_stack.back()].type == node_type::key) 
 			_stack.pop_back();
 		return;
 	}
@@ -673,7 +676,7 @@ namespace another_toml
 	void writer::write_value(date_time value)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::date_time, std::move(value));
-		if(_data->tables[_stack.back()].type == node_type::key) 
+		if(_data->nodes[_stack.back()].type == node_type::key) 
 			_stack.pop_back();
 		return;
 	}
@@ -681,7 +684,7 @@ namespace another_toml
 	void writer::write_value(local_date_time value)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::local_date_time, std::move(value));
-		if(_data->tables[_stack.back()].type == node_type::key) 
+		if(_data->nodes[_stack.back()].type == node_type::key) 
 			_stack.pop_back();
 		return;
 	}
@@ -689,7 +692,7 @@ namespace another_toml
 	void writer::write_value(date value)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::local_date, std::move(value));
-		if(_data->tables[_stack.back()].type == node_type::key) 
+		if(_data->nodes[_stack.back()].type == node_type::key) 
 			_stack.pop_back();
 		return;
 	}
@@ -697,7 +700,7 @@ namespace another_toml
 	void writer::write_value(time value)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::local_time, std::move(value));
-		if(_data->tables[_stack.back()].type == node_type::key) 
+		if(_data->nodes[_stack.back()].type == node_type::key) 
 			_stack.pop_back();
 		return;
 	}
@@ -712,10 +715,10 @@ namespace another_toml
 	// Returns true if a table header should be written for i
 	static bool is_headered_table(index_t i, const toml_internal_data& d) noexcept
 	{
-		auto child = d.tables[i].child;
+		auto child = d.nodes[i].child;
 		while (child != bad_index)
 		{
-			const auto& c_ref = d.tables[child];
+			const auto& c_ref = d.nodes[child];
 			if (node_type::key == c_ref.type ||
 				(node_type::value != c_ref.type &&
 					!empty(c_ref.name)))
@@ -740,10 +743,10 @@ namespace another_toml
 		const auto end = std::end(nodes);
 		for (beg; beg != end; ++beg)
 		{
-			if (empty(d.tables[*beg].name))
+			if (empty(d.nodes[*beg].name))
 				continue;
 
-			out += escape_toml_name(d.tables[*beg].name, o.ascii_output);
+			out += escape_toml_name(d.nodes[*beg].name, o.ascii_output);
 			if (next(beg) != end)
 				out.push_back('.');
 		}
@@ -754,11 +757,11 @@ namespace another_toml
 	static std::vector<index_t> get_children(index_t i, const toml_internal_data& d)
 	{
 		auto children = std::vector<index_t>{};
-		auto child = d.tables[i].child;
+		auto child = d.nodes[i].child;
 		while (child != bad_index)
 		{
 			children.emplace_back(child);
-			child = d.tables[child].next;
+			child = d.nodes[child].next;
 		}
 		return children;
 	}
@@ -767,11 +770,11 @@ namespace another_toml
 	void for_each_child(index_t i, const toml_internal_data& d, UnaryFunction f) 
 		noexcept(std::is_nothrow_invocable_v<UnaryFunction, const internal_node&>)
 	{
-		auto child = d.tables[i].child;
+		auto child = d.nodes[i].child;
 		while (child != bad_index)
 		{
-			std::invoke(f, d.tables[child]);
-			child = d.tables[child].next;
+			std::invoke(f, d.nodes[child]);
+			child = d.nodes[child].next;
 		}
 		return;
 	}
@@ -822,21 +825,21 @@ namespace another_toml
 	{
 		assert(!empty(stack));
 		const auto parent = stack.back();
-		const auto parent_type = d.tables[parent].type;
+		const auto parent_type = d.nodes[parent].type;
 
 		auto children = get_children(parent, d);
 
 		// make sure root keys are written before child tables
 		std::partition(begin(children), end(children), [&d](const index_t i) {
-			return !(d.tables[i].type == node_type::table ||
-				d.tables[i].type == node_type::array_tables);
+			return !(d.nodes[i].type == node_type::table ||
+				d.nodes[i].type == node_type::array_tables);
 			});
 
 		auto beg = begin(children);
 		const auto end = std::end(children);
 		for (beg; beg != end; ++beg)
 		{
-			const auto& c_ref = d.tables[*beg];
+			const auto& c_ref = d.nodes[*beg];
 			switch (c_ref.type)
 			{
 			case node_type::table:
@@ -846,14 +849,6 @@ namespace another_toml
 
 				auto name_stack = stack;
 				name_stack.emplace_back(*beg);
-
-				// skip if all their children are also tables
-				// skip writing empty tables unless they are leafs
-				if (o.skip_empty_tables && skip_table_header(*beg, c_ref.child, d))
-				{
-					write_children<false>(strm, d, o, name_stack, last_newline, indent_level);
-					break;
-				}
 
 				const auto indent = indent_level + 1;
 				if (parent_type != node_type::array_tables && 
@@ -865,6 +860,14 @@ namespace another_toml
 					{
 						strm << '\n';
 						last_newline = strm.tellp();
+					}
+
+					// skip if all their children are also tables
+					// skip writing empty tables unless they are leafs
+					if (o.skip_empty_tables && skip_table_header(*beg, c_ref.child, d))
+					{
+						write_children<false>(strm, d, o, name_stack, last_newline, indent_level);
+						break;
 					}
 
 					optional_indentation(strm, indent, o);
@@ -1102,7 +1105,7 @@ namespace another_toml
 
 	void insert_bad(detail::toml_internal_data& d)
 	{
-		d.tables.emplace_back(internal_node{ {}, node_type::bad_type });
+		d.nodes.emplace_back(internal_node{ {}, node_type::bad_type });
 		return;
 	}
 
@@ -1110,15 +1113,15 @@ namespace another_toml
 	index_t insert_child(detail::toml_internal_data& d, const index_t parent, detail::internal_node n)
 	{
 		assert(parent != bad_index);
-		const auto new_index = size(d.tables);
-		auto& p = d.tables[parent];
+		const auto new_index = size(d.nodes);
+		auto& p = d.nodes[parent];
 		auto allow_duplicates = p.type == node_type::array || p.type == node_type::array_tables;
 		if (p.child != bad_index)
 		{
 			auto child = p.child;
 			while (true)
 			{
-				auto& child_ref = d.tables[child];
+				auto& child_ref = d.nodes[child];
 				if (child_ref.name == n.name && !allow_duplicates)
 				{
 					if (child_ref.type == node_type::table && 
@@ -1127,13 +1130,10 @@ namespace another_toml
 						p.table_type == n.table_type)
 						return child;
 
-					//if (!allow_duplicates)
-					//{
-						if constexpr (NoThrow)
-							return bad_index;
-						else
-							throw duplicate_element{ "Tried to insert duplicate element: "s + n.name + ", into: " + p.name };
-					//}
+					if constexpr (NoThrow)
+						return bad_index;
+					else
+						throw duplicate_element{ "Tried to insert duplicate element: "s + n.name + ", into: " + p.name };
 				}
 
 				if (child_ref.next == bad_index)
@@ -1142,25 +1142,25 @@ namespace another_toml
 				child = child_ref.next;
 			}
 
-			d.tables[child].next = new_index;
+			d.nodes[child].next = new_index;
 		}
 		else
 			p.child = new_index;
 
-		d.tables.emplace_back(std::move(n));
+		d.nodes.emplace_back(std::move(n));
 		return new_index;
 	}
 
 	static index_t find_child(const detail::toml_internal_data& d, const index_t parent, const std::string_view s) noexcept
 	{
-		auto& p = d.tables[parent];
+		auto& p = d.nodes[parent];
 		if (p.child == bad_index)
 			return bad_index;
 
 		auto next = p.child;
 		while (next != bad_index)
 		{
-			auto c = &d.tables[next];
+			auto c = &d.nodes[next];
 			if (c->name == s)
 				break;
 			next = c->next;
@@ -1215,7 +1215,6 @@ namespace another_toml
 		{
 			col = {};
 			++line;
-			//token_stream.emplace_back(token_type::newline);
 			return;
 		}
 
@@ -1244,8 +1243,8 @@ namespace another_toml
 		{
 			for (auto t : open_tables)
 			{
-				assert(toml_data.tables[t].type == node_type::table);
-				toml_data.tables[t].closed = true;
+				assert(toml_data.nodes[t].type == node_type::table);
+				toml_data.nodes[t].closed = true;
 			}
 			open_tables.clear();
 		}
@@ -1256,8 +1255,6 @@ namespace another_toml
 		// tables that need to be closed when encountering the next table header
 		std::vector<index_t> open_tables;
 		std::vector<token_type> token_stream;
-		//index_t parent = bad_index;
-		//index_t prev_sibling = bad_index;
 		std::size_t line = {};
 		std::size_t col = {};
 		#ifndef NDEBUG
@@ -1277,21 +1274,24 @@ namespace another_toml
 		return ch == '\n';
 	}
 
-	// TOML says that \n and \r are forbidden in comments
-	// in reality \n and \r\n marks the end of a comment
-	constexpr auto comment_forbidden_chars = std::array<char, 32>{
-		//U+0000 to U+0008
-		'\0', 1, 2, 3, 4, 5, 6, '\a', '\b',
-		//U+000A to U+001F
-		'\n', '\v', '\f', '\r', 14, 15, 16, 17, 18, 19, 20,
-		21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
-		//U+007F
-		127
-	};
+	
 
 	//test ch against the list of forbidden chars above
 	constexpr bool comment_forbidden_char(char ch) noexcept
 	{
+		/*
+		constexpr auto comment_forbidden_chars = std::array<char, 32>{
+			//U+0000 to U+0008
+			'\0', 1, 2, 3, 4, 5, 6, '\a', '\b',
+			//U+000A to U+001F
+			'\n', '\v', '\f', '\r', 14, 15, 16, 17, 18, 19, 20,
+			21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+			//U+007F
+			127
+		};
+		*/
+
+		// simplified version of the above array
 		return ch >= 0 && ch < 9 ||
 			ch > 9 && ch < 32 ||
 			ch == 127;
@@ -1338,11 +1338,11 @@ namespace another_toml
 	template<bool NoThrow>
 	static index_t insert_child_table_array(index_t parent, std::string name, detail::toml_internal_data& d)
 	{
-		if (auto* node = &d.tables[parent];
+		if (auto* node = &d.nodes[parent];
 			node->child != bad_index)
 		{
 			auto child = node->child;
-			node = &d.tables[child];
+			node = &d.nodes[child];
 
 			while (node)
 			{
@@ -1368,7 +1368,7 @@ namespace another_toml
 				if (node->next == bad_index)
 					break;
 				child = node->next;
-				node = &d.tables[child];
+				node = &d.nodes[child];
 			}
 
 			//create array
@@ -1397,7 +1397,7 @@ namespace another_toml
 			}
 		}
 
-		auto& node = d.tables[parent];
+		auto& node = d.nodes[parent];
 		assert(node.type == node_type::array_tables);
 
 		// insert array member
@@ -1413,20 +1413,15 @@ namespace another_toml
 		return ret;
 	}
 
-	template<bool NoThrow>
-	static index_t insert_child_key(index_t parent, std::string name, detail::toml_internal_data& d)
-	{
-		auto key = detail::internal_node{ std::move(name), node_type::key};
-		return insert_child<NoThrow>(d, parent, std::move(key));
-	}
-
+	// access a template func from string_util.cpp
 	template<bool NoThrow>
 	std::optional<std::string> to_u8_str(char32_t ch);
 
 	extern template std::optional<std::string> to_u8_str<true>(char32_t ch);
 	extern template std::optional<std::string> to_u8_str<false>(char32_t ch);
 
-	std::uint32_t parse_unicode_char(char c, parser_state& strm)
+	// variant of unicode_u8_to_u32 that reads from parser_state
+	static char32_t parse_unicode_char(char c, parser_state& strm) noexcept
 	{
 		if (!is_unicode_start(c))
 			return unicode_error_char;
@@ -1487,7 +1482,7 @@ namespace another_toml
 				if (eof)
 				{
 					std::cerr << "Unexpected end of file in quoted string\n"s;
-					return {}; // illigal character in string
+					return {};
 				}
 			}
 
@@ -1621,7 +1616,6 @@ namespace another_toml
 	extern template std::optional<std::string> replace_escape_chars<true>(std::string_view);
 	extern template std::optional<std::string> replace_escape_chars<false>(std::string_view);
 
-	// TODO: break up into smaller functions, the if chain is too chaotic
 	template<bool NoThrow, bool Table = false>
 	static key_name parse_key_name(parser_state& strm, detail::toml_internal_data& d)
 	{
@@ -1764,7 +1758,7 @@ namespace another_toml
 					
 					if (child == bad_index)
 						child = insert_child_table<NoThrow>(parent, std::move(*name), d, table_def::dot);
-					else if(auto& c = d.tables[child]; 
+					else if(auto& c = d.nodes[child]; 
 						c.type == node_type::array_tables)
 					{
 						if constexpr (!Table)
@@ -1782,7 +1776,7 @@ namespace another_toml
 						child = c.child;
 						while (true)
 						{
-							auto* node = &d.tables[child];
+							auto* node = &d.nodes[child];
 							if (node->next == bad_index)
 								break;
 							child = node->next;
@@ -1892,7 +1886,7 @@ namespace another_toml
 			auto base_en = writer::int_base::dec;
 			if (size(string) > 1)
 			{
-				const auto base_chars = std::string_view(begin(string), begin(string) + 2);
+				const auto base_chars = std::string_view{ &*begin(string), 2 };
 				if (base_chars == "0x"sv)
 				{
 					base = 16;
@@ -1929,9 +1923,12 @@ namespace another_toml
 				return { value_type::out_of_range, {}, {} };
 		}
 		
+		using error_t = parse_float_string_return::error_t;
 		const auto float_ret = parse_float_string(str);
-		if (float_ret)
-			return { value_type::floating_point, floating{ float_ret->value, float_ret->representation }, std::string{str} };
+		if (float_ret.error == error_t::none)
+			return { value_type::floating_point, floating{ float_ret.value, float_ret.representation }, std::string{str} };
+		else if(float_ret.error == error_t::out_of_range)
+			return { value_type::out_of_range, {}, {} };
 
 		const auto ret = parse_date_time(str);
 		return std::visit([str](auto&& val)->get_value_type_ret {
@@ -1961,7 +1958,7 @@ namespace another_toml
 		auto ch = char{};
 		auto eof = bool{};
 		const auto parent = strm.stack.back();
-		const auto parent_type = toml_data.tables[parent].type;
+		const auto parent_type = toml_data.nodes[parent].type;
 		constexpr auto array = std::is_same_v<Tag, array_tag_t>;
 		constexpr auto inline_table = std::is_same_v<Tag, inline_tag_t>;
 		assert((parent_type == node_type::array) == array);
@@ -1974,12 +1971,6 @@ namespace another_toml
 				if (eof)
 					break;
 			}
-
-			/*if (ch == ' ')
-			{
-				strm.putback(ch);
-				break;
-			}*/
 
 			if (ch == '#')
 			{
@@ -2075,7 +2066,7 @@ namespace another_toml
 				return false;
 			}
 			else
-				throw parser_error{ "Error parsing value"s };
+				throw parser_error{ "Parsed value was out of range"s };
 		}
 
 		strm.token_stream.push_back(token_type::value);
@@ -2301,7 +2292,6 @@ namespace another_toml
 	template<bool NoThrow>
 	static bool parse_comment(parser_state& strm) noexcept(NoThrow)
 	{
-		//strm.token_stream.emplace_back(token_type::comment)
 		while (strm.strm.good())
 		{
 			auto [ch, eof] = strm.get_char<true>();
@@ -2425,7 +2415,7 @@ namespace another_toml
 		// push back an inline table
 		assert(!empty(strm.stack));
 		const auto parent = strm.stack.back();
-		const auto& p = toml_data.tables[parent];
+		const auto& p = toml_data.nodes[parent];
 		assert(p.type == node_type::key || p.type == node_type::array);
 		const auto table = insert_child<NoThrow>(toml_data, parent, internal_node{ {}, node_type::inline_table });
 		strm.stack.emplace_back(table);
@@ -2467,7 +2457,7 @@ namespace another_toml
 						throw unexpected_character{ "Trailing comma is forbidden in inline tables"s };
 				}
 
-				toml_data.tables[table].closed = true;
+				toml_data.nodes[table].closed = true;
 				assert(table == strm.stack.back());
 				strm.stack.pop_back();
 				return true;
@@ -2547,11 +2537,13 @@ namespace another_toml
 			}
 		}
 
-		if (toml_data.tables[key_str.parent].closed == false)
+		if (toml_data.nodes[key_str.parent].closed == false)
 			strm.open_tables.emplace_back(key_str.parent);
 
-		const auto key_index = insert_child_key<NoThrow>(key_str.parent, std::move(*key_str.name), toml_data);
-		
+
+		auto key = detail::internal_node{ std::move(*key_str.name), node_type::key };
+		const auto key_index = insert_child<NoThrow>(toml_data, key_str.parent, std::move(key));
+
 		if constexpr (NoThrow)
 		{
 			if (key_index == bad_index)
@@ -2574,7 +2566,6 @@ namespace another_toml
 			}
 		}
 
-		//look for '='
 		if (ch != '=')
 		{
 			if constexpr (NoThrow)
@@ -2647,7 +2638,7 @@ namespace another_toml
 		}
 
 		strm.token_stream.emplace_back(token_type::value);
-		const auto parent_type = toml_data.tables[strm.stack.back()].type;
+		const auto parent_type = toml_data.nodes[strm.stack.back()].type;
 		if (parent_type == node_type::key)
 			strm.stack.pop_back();
 		return ret;
@@ -2656,8 +2647,8 @@ namespace another_toml
 	template<bool NoThrow, bool Array>
 	static index_t parse_table_header(parser_state& strm, toml_internal_data& toml_data)
 	{
-		assert(toml_data.tables[strm.stack.back()].type == node_type::table ||
-			toml_data.tables[strm.stack.back()].type == node_type::array_tables);
+		assert(toml_data.nodes[strm.stack.back()].type == node_type::table ||
+			toml_data.nodes[strm.stack.back()].type == node_type::array_tables);
 		strm.stack.pop_back();
 		strm.close_tables(toml_data);
 
@@ -2719,7 +2710,7 @@ namespace another_toml
 		}
 
 		if (const auto table = find_table(*name.name, name.parent, toml_data);
-			table != bad_index && toml_data.tables[table].closed == true)
+			table != bad_index && toml_data.nodes[table].closed == true)
 		{
 			if constexpr (!Array)
 			{
@@ -2814,7 +2805,7 @@ namespace another_toml
 	static root_node parse_toml(std::istream& strm)
 	{
 		auto toml_data = root_node::data_type{ new detail::toml_internal_data{} };
-		auto& t = toml_data->tables;
+		auto& t = toml_data->nodes;
 		auto p_state = parser_state{ strm };
 
 		// consume the BOM if it is present
@@ -2855,7 +2846,7 @@ namespace another_toml
 
 			if (ch == '[') // start table or array
 			{
-				if (p_state.strm.peek() == '[')//array of tables
+				if (p_state.strm.peek() == '[') //array of tables
 				{
 					p_state.ignore();
 					auto table = parse_table_header<NoThrow, true>(p_state, *toml_data);
@@ -2901,7 +2892,6 @@ namespace another_toml
 				if (eof)
 					break;
 
-				// FIX: for key=vallue key=value on same line
 				if (whitespace(ch, p_state))
 				{
 					std::tie(ch, eof) = p_state.get_char<true>();
@@ -2931,7 +2921,6 @@ namespace another_toml
 					else
 						throw unexpected_character{ "Key/Value pairs must be followed by a newline"s };
 				}
-				//ENDFIX
 			}
 			else
 			{
@@ -2940,7 +2929,7 @@ namespace another_toml
 			}
 		}
 
-		if (toml_data->tables.back().type == node_type::bad_type)
+		if (toml_data->nodes.back().type == node_type::bad_type)
 			return root_node{};
 
 
@@ -2968,22 +2957,37 @@ namespace another_toml
 		return parse<NoThrow>(strstream);
 	}
 
-	/*template<bool NoThrow>
-	node parse(const std::filesystem::path& path)
+	template<bool NoThrow>
+	root_node parse(const std::filesystem::path& path)
 	{
-		if (!std::filesystem::exists(path))
-			return {};
-
-		if (std::filesystem::is_directory(path))
-			return {};
+		if constexpr (NoThrow)
+		{
+			auto ec = std::error_code{};
+			if (!std::filesystem::exists(path, ec) ||
+				std::filesystem::is_directory(path, ec))
+			{
+				std::cerr << ec << ": "s << ec.message();
+				return root_node{};
+			}
+		}
 
 		auto strm = std::ifstream{ path };
 		return parse<NoThrow>(strm);
-	}*/
+	}
 
 	root_node parse(std::string_view toml)
 	{
 		return parse<false>(toml);
+	}
+
+	root_node parse(const std::string& toml)
+	{
+		return parse(std::string_view{ toml });
+	}
+
+	root_node parse(const char* toml)
+	{
+		return parse(std::string_view{ toml });
 	}
 
 	root_node parse(std::istream& strm)
@@ -2991,23 +2995,33 @@ namespace another_toml
 		return parse<false>(strm);
 	}
 
-	/*node parse(const std::filesystem::path& path)
+	root_node parse(const std::filesystem::path& path)
 	{
 		return parse<false>(path);
-	}*/
+	}
 
-	root_node parse(std::string_view toml, detail::no_throw_t) noexcept
+	root_node parse(std::string_view toml, detail::no_throw_t)
 	{
 		return parse<true>(toml);
 	}
 
-	root_node parse(std::istream& strm, detail::no_throw_t) noexcept
+	root_node parse(const std::string& toml, detail::no_throw_t)
+	{
+		return parse<true>(std::string_view{ toml });
+	}
+
+	root_node parse(const char* toml, detail::no_throw_t)
+	{
+		return parse<true>(std::string_view{ toml });
+	}
+
+	root_node parse(std::istream& strm, detail::no_throw_t)
 	{
 		return parse<true>(strm);
 	}
 
-	/*node parse(const std::filesystem::path& filename, detail::no_throw_t) noexcept
+	root_node parse(const std::filesystem::path& filename, detail::no_throw_t)
 	{
 		return parse<true>(filename);
-	}*/
+	}
 }

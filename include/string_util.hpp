@@ -1,6 +1,7 @@
 #ifndef ANOTHER_TOML_STRING_UTIL_HPP
 #define ANOTHER_TOML_STRING_UTIL_HPP
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -22,10 +23,20 @@ namespace another_toml
 	{
 		double value;
 		writer::float_rep representation = writer::float_rep::normal;
+
+		enum class error_t : std::uint8_t
+		{
+			none,
+			bad,
+			out_of_range
+		};
+
+		// if != error_t::none, then an error occured
+		error_t error = error_t::none;
 	};
 
 	// parses floating point value strings
-	std::optional<parse_float_string_return> parse_float_string(std::string_view str);
+	parse_float_string_return parse_float_string(std::string_view str);
 
 	// Throws unicode_error if str is not a valid UTF-8 string
 	// to_escaped_string only escapes control characters
@@ -47,10 +58,10 @@ namespace another_toml
 	// returns true if 's' is a valid UTF-8 string
 	bool valid_unicode_string(std::string_view s) noexcept;
 
-	constexpr auto unicode_error_char = 0xD7FF17;
+	constexpr auto unicode_error_char = char32_t{ 0xD7FF17 };
 	// Converts the first character in str into a UTF-32 char
 	// Returns unicode_error_char on failure
-	char32_t unicode_u8_to_u32(std::string_view str);
+	char32_t unicode_u8_to_u32(std::string_view str) noexcept;
 	// Converts ch to a utf-8 encoded string representing char
 	std::string unicode_u32_to_u8(char32_t ch);
 
