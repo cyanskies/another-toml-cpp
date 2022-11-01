@@ -1,8 +1,8 @@
 # another-toml-cpp
- 
-## Parsing Example
+Another TOML is a cpp parser and writer for TOML v1.0
 
-	# This is a TOML document
+## Usage
+The examples in this section are used to read this example toml file
 	title = "TOML Example"
 
 	[owner]
@@ -33,45 +33,77 @@
 	name = "Nail"
 	sku = 284758393
 	color = "gray"
+### Parsing Example
+The following code can be used to reads the above toml file and extracts each of the values stored in it.
+The library is in the namespace another_toml. These examples operate as though the following namespace declaration
+was present near the top of the file
 
-The following code can be used to read the above toml file:
 	#include "another_toml.hpp"
-
 	namespace toml = another_toml;
-	void parse_toml_example(std::string_view toml
-		std::filesystem::path file, std::istream& stream)
+	
+Parse a toml file by passing the toml content as a string, c string, or string_view.
+
+	auto toml_str = std::string{ "...toml content..." };
+	auto toml_c_str = "...toml content...";
+	auto toml_sv = std::string_view{ toml_str };
+	auto root_table = toml::parse(toml_str);
+	auto root_table = toml::parse(toml_c_str);
+	auto root_table = toml::parse(toml_sv);
+	
+Otherwise you can pass a stream that contains the file or a path to the file on the filesystem.
+
+	auto path = std::filesystem::path{ "./path/to/content.toml" };
+	auto root_table = toml::parse(std::cin);
+	auto root_table = toml::parse(path);
+	
+Parser functions will throw `another_toml::parser_error`
+You can also catch the more specific exception sub-types defined in another_toml.hpp
+
+You can pass `another_toml::no_throw` to request the parser to not throw exceptions.
+Parser may still throw standard library exceptions related to memory alloc or 
+stream/filesystem access(for the overloads that use these).
+Use `good()` to test if the returned node can be read from.
+
+	auto root_table = toml::parse(toml_str, toml::no_throw);
+	auto success = root_table.good();	
+	
+Call `get_first_child()` to access a nodes child node.
+
+	auto first_child = root_table.get_first_child();
+	
+You can then call `get_next_sibling()` to access each of the other child nodes in a chain.
+
+	auto second_child = first_child.get_next_sibling();
+	auto third_child = second_child.get_next_sibling();
+
+Use `has_children` and `has_sibling()` to test if a node has any children, or if a child node has any sibling nodes
+
+	if(root_table.has_chilren())
 	{
-		auto root_table = toml::root_node{};
-
-		// toml::parse reads a toml file from strings, streams and files
-		// toml::parse will read until it reaches the end of the string or
-		// a end-of-file.
-		try
+		auto first_child = root_table.get_first_child();
+		if(first_child.has_sibling())
 		{
-			// pass a utf-8 encoded std::string, const char*, std::string_view
-			root_table = toml::parse(toml);
-			// pass a file path to open and read from a file
-			root_table = toml::parse(file);
-			// pass a custom stream to read from
-			root_table = toml::parse(stream);
+			auto second_child = first_child.get_next_sibling();
 		}
-		catch (toml::parser_error& p)
-		{
-			// these parsers throw parser_error and its subtypes
-		}
+	}
 
-		// parse file without throwing exceptions by passing no_throw
-		root_table = toml::parse(toml, toml::no_throw);
-		// test if the toml source was parsed correclty with .good()
-		assert(root_table.good());
+You can also check if a call to `get_first_child()` or `get_next_sibling()` was successful by calling `good()`
+on the returned node.
 
-		// Even with no_throw, parse can still throw a
-		// number of standard library exceptions.
-		// eg:
-		//	filesystem errors
-		//	bad_alloc
-		//	std::ios_base::failure if you set istream::exceptions
+	auto first_child = root_node.get_first_child();
+	auto success = first_child.good();
 
+Examine the type of the node using the following functions: `table()`, `key()`, `array()`, `array_table()`, `value()`, `inline_table()`
+They correspond to the TOML element types of the same name.
+
+	auto success = first_child.key();
+	success = second_child.table();
+	
+If you don't check that a node is good, or that it is of the expected type then exceptions may be thrown by later functions
+
+Extract a specific node from the root table node using `find_child(string_view)`
+
+	auto title_key_node = root_table.find_child("title");
 		// extract a value
 		auto title_node = root_table.get_value<std::string>("title");
 
