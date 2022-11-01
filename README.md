@@ -36,7 +36,7 @@ The examples in this section are used to read this example toml file
 ### Parsing Example
 The following code can be used to reads the above toml file and extracts each of the values stored in it.
 The library is in the namespace another_toml. These examples operate as though the following namespace declaration
-was present near the top of the file
+was present near the top of the file so that we can access everything using a toml namespace
 
 	#include "another_toml.hpp"
 	namespace toml = another_toml;
@@ -67,6 +67,15 @@ Use `good()` to test if the returned node can be read from.
 	auto root_table = toml::parse(toml_str, toml::no_throw);
 	auto success = root_table.good();	
 	
+#### TOML Structure
+When a toml source is parsed, it is converted into a node tree structure and a root table node is returned. 
+- Table nodes can contain child tables, keys, and array tables.
+- Inline table nodes contain the same kind of nodes as tables.
+- Key nodes usually contain a single value node, but may also contain an inline table node, or an array node.
+- Array nodes contain value nodes, but can also contain arrays or inline tables.
+- Array table nodes contain table nodes(these tables don't have names, as their name in a toml file is the name of the array table)
+
+#### Access Child Nodes
 Call `get_first_child()` to access a nodes child node.
 
 	auto first_child = root_table.get_first_child();
@@ -93,6 +102,7 @@ on the returned node.
 	auto first_child = root_node.get_first_child();
 	auto success = first_child.good();
 
+#### Examine Node Type
 Examine the type of the node using the following functions: `table()`, `key()`, `array()`, `array_table()`, `value()`, `inline_table()`
 They correspond to the TOML element types of the same name.
 
@@ -101,71 +111,141 @@ They correspond to the TOML element types of the same name.
 	
 If you don't check that a node is good, or that it is of the expected type then exceptions may be thrown by later functions
 
-Extract a specific node from the root table node using `find_child(string_view)`
+#### Extract Values
+In order to find a specific node you will also need to examine its name. All node types can be converted into strings using `as_string`
 
-	auto title_key_node = root_table.find_child("title");
-		// extract a value
-		auto title_node = root_table.get_value<std::string>("title");
+	if(first_child.key())
+		auto key_name = first_child.as_string();
+	if(second_child.table())
+		auto table_name = second_child.as_string();
+		
+Some nodes don't have names, such as arrays or inline tables that are nested within arrays.
 
-		// extract a table node
-		auto owner = root_table.find_table("owner");
+Once you have a value node you can convert it into a usable c++ type.
+TOML types correspond to the following c++ types when using this library:
+- String: `std::string`
+- Integer: `std::int64_t`, int64 is used as it can hold the entire range required by the TOML standard
+- Float: `double`, double is used to preserve the precision level required by the TOML standard
+- Boolean: `bool`
 
-		// extract keys from a table using the low level api
-		auto owner_key = owner.find_child("name");
-		// the value is srored by a key as its only child node
-		auto owner_value = owner_key.get_first_child();
-		// convert the value to string
-		auto owner_name = owner_value.as_string();
-		// get_value is a short-hand for the above, its finds the key
-		// gets its first child, and converts it to the passed type
-		auto owner_dob = owner.get_value<toml::date_time>("dob");
+Another TOML includes types for storing TOML dates and times:
+- Offset Date Time: `another_toml::date_time`
+- Local Date Time: `another_toml::local_date_time`
+- Local Date: `another_toml::date`
+- Local Time: `another_toml::time`
 
-		auto database = root_table.find_table("database");
-		// pass a default value to be used if "enabled" isn't found
-		auto database_enabled = database.get_value<bool>("enabled", false);
-		// extract a heterogeneous array directly into a container
-		auto database_ports = database.get_value<std::vector<std::int64_t>>("ports");
+A value node can be converted to one of the types above using the following functions:
+
+	std::string as_string()
+	std::int64_t as_integer()
+	double as_floating()
+	bool as_boolean()
+	toml::date_time as_date_time()
+	toml::local_date_time as_date_time_local()
+	toml::date as_date_local()
+	toml::time as_time_local()
 	
-		//we could also iterate over the ports array directly
-		auto port_key = database.find_child("ports");
-		auto port_array = port_key.get_first_child();
-		std::cout << "ports = [ ";
-		for (auto elm : port_array)
-		{
-			// we can test each element to see if it is a value, sub array or inline table
-			if (elm.value() && elm.type() == toml::value_type::integer)
-			{
-				// all toml value types can be converted to string
-				std::cout << elm.as_string() << ", ";
-			}
-		}
-		std::cout << "]\n\n";
+Other than `as_string()`, the above functions will throw `another_toml::wrong_type` if the node
+can't be converted to that type.
 
-		// extract a non-heterogeneous array
-		auto data_key = database.find_child("data");
-		auto data_array = data_key.get_first_child();
-		// extract all the array elements as a vector
-		auto elements = data_array.get_children();
-		auto data_strings = elements[0].as_t<std::vector<std::string>>();
-		auto data_floats = elements[1].as_t<std::vector<double>>();
+To extract `title` from the example toml source we can use the following code
+to get the value node.
 
-		// extract an inline table
+	auto title_key = root_node.get_first_child();
+	auto title_value = title_key.get_first_child();
+	
+We can confirm its type using `type()`
+
+	auto correct_type = (title_value.type() == toml::value_type::string);
+
+And we can extract the message using `as_string()`
+
+	auto title_str = title_value.as_string();
+	
+#### Extracting a Table and Value
+Now we'll extract `[owner]` and its key `dob`.
+
+	auto owner_table = title_key.get_next_sibling();
+	auto is_table = owner_table.table();
+	
+	auto owner_name = owner_table.get_first_child();
+	auto owner_dob = owner_name.get_next_sibling();
+	auto dob_value = owner_dob.get_first_child();
+	
+Since we expect dob to be a date and time value we will use `as_date_time()` to extract it.
+We can also convert it(and any other type) into a string using `as_string()`
+
+	auto dob = dob_value.as_date_time();
+	auto dob_str = dob_value.as_string();
+	
+#### Finding Child Nodes
+Access nodes as above if useful for reading TOML documents with unknown data in them;
+but most of the time we are expecting a specific structure for our document.
+We can use `find_child(std::string_view)` to find a specific node by name.
+
+	auto database = root_node.find_child("database");
+	auto success = database.good();
+	
+#### Templated Extraction Functions
+You can also convert nodes to values using the templated helper function `as_t<Type>()`.
+
+	auto enabled_key = database.find_child("enabled");
+	auto enabled_value = enabled_key.get_first_child();
+	auto is_enabled = enabled_value.as_t<bool>();
+	
+There is also a templated `get_value<Type>(std::string_view)` function to
+cut out the boilerplate code needed to extract keys and their values.
+
+	auto is_enabled = database.get_value<bool>("enabled);
+	
+`get_value` will throw exceptions if the key is missing or if the value
+cannot be converted into the desired type.
+
+We can iterate over a nodes children to extract arrays
+
+	auto ports_key = database.find_child("ports");
+	auto ports_array = port_key.get_first_child();
+	auto ports = std::vector<std::int64_t>{};
+	for (auto elm : port_array)
+		ports.push_back(elm.as_integer());
+
+`get_value` can also be used to extract heterogeneous arrays directly into a container
+
+	auto ports = database.get_value<std::vector<std::int64_t>>("ports");
+
+We can also extract all the child nodes as a `std::vector` using `get_children()`
+
+	auto data_key = database.find_child("data");
+	auto data_array = data_key.get_first_child();
+	auto elements = data_array.get_children();
+	auto data_strings = elements[0].as_t<std::vector<std::string>>();
+	auto data_floats = elements[1].as_t<std::vector<double>>();
+
+#### Extracting Tables
+We can also extract inline tables using the helper function `find_table(std::string_view)`
+
 		auto temp_targets = database.find_table("temp_targets");
 		auto temp_cpu = temp_targets.get_value<double>("cpu");
 		auto temp_case = temp_targets.get_value<double>("case");
 
-		auto servers = root_table.find_table("servers");
+`find_table` can throw `another_toml::key_not_found` or `another_toml::wrong_type`.
 
-		// extract a sub-table, this looks the same as extracting an inline table
-		auto alpha = servers.find_table("alpha");
-		auto alpha_ip = alpha.get_value<std::string>("ip");
-		auto alpha_role = alpha.get_value<std::string>("role");
+`find_table` works with normal tables too!
 
-		auto beta = servers.find_table("beta");
-		auto beta_ip = alpha.get_value<std::string>("ip");
-		auto beta_role = alpha.get_value<std::string>("role");
+	auto servers = root_table.find_table("servers");
 
-		// arrays of tables look just like an array
+	auto alpha = servers.find_table("alpha");
+	auto alpha_ip = alpha.get_value<std::string>("ip");
+	auto alpha_role = alpha.get_value<std::string>("role");
+
+	auto beta = servers.find_table("beta");
+	auto beta_ip = alpha.get_value<std::string>("ip");
+	auto beta_role = alpha.get_value<std::string>("role");
+
+#### Arrays of Tables
+Arrays of tables work just like a normal array, except the child nodes are all tables.
+The tables in the array don't have names, when you iterate through them `as_string()` will
+return an empty string: ""
 		auto products_array = root_table.find_child("products");
 		std::cout << "[[products]]\n";
 		for (auto table_elm : products_array)
