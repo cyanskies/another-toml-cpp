@@ -19,11 +19,12 @@ cmake_policy(SET CMP0076 NEW)
 target_sources(${PROJECT_NAME}
 	PUBLIC
 	./include/another_toml.hpp
-	./include/string_util.hpp
-	./include/string_util.inl
+	./include/another_toml.inl
+	./include/another_toml_string_util.hpp
+	./include/another_toml_string_util.inl
 	PRIVATE
 	./source/another_toml.cpp
-	./source/string_util.cpp
+	./source/another_toml_string_util.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC ./include)

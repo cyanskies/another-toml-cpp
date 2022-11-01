@@ -44,7 +44,7 @@ namespace another_toml
 			return out;
 		}
 		else if constexpr (std::is_same_v<T, std::int64_t>)
-			return as_int();
+			return as_integer();
 		else if constexpr (std::is_same_v<T, double>)
 			return as_floating();
 		else if constexpr (std::is_same_v<T, bool>)

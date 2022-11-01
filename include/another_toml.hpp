@@ -256,7 +256,7 @@ namespace another_toml
 		// matching the value_type of the node
 		// this requires value() to return true and type() to return
 		// the type desired.
-		std::int64_t as_int() const;
+		std::int64_t as_integer() const;
 		double as_floating() const;
 		bool as_boolean() const;
 		date_time as_date_time() const;

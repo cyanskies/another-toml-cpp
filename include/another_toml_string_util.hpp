@@ -75,6 +75,6 @@ namespace another_toml
 	constexpr bool valid_u32_char(char32_t val) noexcept;
 }
 
-#include "string_util.inl"
+#include "another_toml_string_util.inl"
 
 #endif // !ANOTHER_TOML_STRING_UTIL_HPP
