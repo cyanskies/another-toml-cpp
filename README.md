@@ -1,5 +1,9 @@
-# another-toml-cpp
-Another TOML is a cpp parser and writer for TOML v1.0
+# Another TOML
+Another TOML is a cpp parser and writer for TOML v1.0.
+Another TOML passes the tests at `BurntSushi/toml-test`.
+
+Another TOML can be used to parse a read toml files without exceptions, as long as you call
+the functions to confirm that nodes are valid and the expected kind of toml element or value type.
 
 ## Usage
 The examples in this section are used to read this example toml file
@@ -87,7 +91,7 @@ You can then call `get_next_sibling()` to access each of the other child nodes i
 
 Use `has_children` and `has_sibling()` to test if a node has any children, or if a child node has any sibling nodes
 
-	if(root_table.has_chilren())
+	if (root_table.has_chilren())
 	{
 		auto first_child = root_table.get_first_child();
 		if(first_child.has_sibling())
@@ -245,21 +249,32 @@ We can also extract inline tables using the helper function `find_table(std::str
 #### Arrays of Tables
 Arrays of tables work just like a normal array, except the child nodes are all tables.
 The tables in the array don't have names, when you iterate through them `as_string()` will
-return an empty string: ""
+return an empty string.
+
 		auto products_array = root_table.find_child("products");
-		std::cout << "[[products]]\n";
+		struct product
+		{
+			std::string name;
+			std::int64_t sku;
+			std::string color;
+		}
+		
+		auto product_vect = std::vector<product>{};
+		
 		for (auto table_elm : products_array)
 		{
-			std::cout << "[ ";
-			for (auto key : table_elm)
-			{
-				if (key.key())
-				{
-					std::cout << key.as_string() << " = ";
-					auto val = key.get_first_child();
-					std::cout << val.as_string() << "; ";
-				}
-			}
-			std::cout << "]\n";
+			auto new_poduct = product{};
+			auto name = table_elm.find_child("name");
+			if(name.good())
+				new_product.name = name.get_first_child().as_string();
+			auto sku = table_elm.find_child("sku");
+			if(sku.good())
+				new_product.sky = sku.get_first_child().as_integer();
+			auto color = table_elm.find_child("color");
+			if(color.good())
+				new_product.color = sku.get_first_child().as_string();
+			product_vect.emplace_back(new_product);			
 		}
-	}
+
+## Installing
+Include Another TOML as a git submodule and configure it using cmake.
