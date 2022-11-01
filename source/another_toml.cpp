@@ -115,7 +115,7 @@ namespace another_toml
 	template<bool R>
 	bool basic_node<R>::good() const noexcept
 	{
-		return _data && (_index != bad_index ||
+		return _data && !(_index == bad_index ||
 			node_type::bad_type == _data->nodes[_index].type);
 	}
 
@@ -195,6 +195,57 @@ namespace another_toml
 	basic_node<> basic_node<>::get_first_child() const
 	{
 		return basic_node<>{ _data, _data->nodes[_index].child};
+	}
+
+	template<bool R>
+	bool basic_node<R>::has_sibling() const noexcept
+	{
+		return _data->nodes[_index].next != bad_index;
+	}
+
+	template<>
+	basic_node<> basic_node<true>::get_next_sibling() const
+	{
+		return basic_node<>{ _data.get(), _data->nodes[_index].next};
+	}
+
+	template<>
+	basic_node<> basic_node<>::get_next_sibling() const
+	{
+		return basic_node<>{ _data, _data->nodes[_index].next};
+	}
+
+	template<bool R>
+	basic_node<> basic_node<R>::find_child(std::string_view name) const
+	{
+		if (!table() && !inline_table())
+			throw wrong_node_type{ "Cannot call find_child on this type of node"s };
+
+		auto child = get_first_child();
+		while (child.good() && child.as_string() != name)
+			child = child.get_next_sibling();
+
+		return child;
+	}
+
+	template<bool R>
+	basic_node<> basic_node<R>::find_table(std::string_view name) const
+	{
+		const auto table = find_child(name);
+		if (!table.good())
+			throw key_not_found{ "No table found with that name"s };
+
+		//const auto table = table_key.get_first_child();
+		if (table.table() || table.inline_table())
+			return table;
+		else if (table.key())
+		{
+			const auto t_value = table.get_first_child();
+			if (t_value.table() || t_value.inline_table())
+				return t_value;
+		}
+
+		throw wrong_type{ "Name doesnt reference a table"s };
 	}
 
 	template<bool R>
@@ -1575,7 +1626,7 @@ namespace another_toml
 		
 		return out;
 	}
-
+	
 	static std::optional<std::string> get_unquoted_name(parser_state& strm, char ch)
 	{
 		if (!valid_key_name_char(ch))

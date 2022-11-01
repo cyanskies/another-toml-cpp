@@ -57,6 +57,22 @@ namespace another_toml
 		using parser_error::parser_error;
 	};
 
+	// thrown if calling a function that isn't 
+	// supported by the current node type
+	class wrong_node_type : public parser_error
+	{
+	public:
+		using parser_error::parser_error;
+	};
+
+	// thrown by some functions that search for keys,
+	// but do not have another way to report failure
+	class key_not_found : public parser_error
+	{
+	public:
+		using parser_error::parser_error;
+	};
+
 	// thrown if an invalid raw unicode or escaped unicode char was found
 	class invalid_unicode_char : public unicode_error
 	{
@@ -69,8 +85,19 @@ namespace another_toml
 		using index_t = std::size_t;
 		constexpr auto bad_index = std::numeric_limits<detail::index_t>::max();
 
-		struct toml_internal_data;
+		template<typename Cont, typename = void>
+		constexpr auto is_container_v = false;
+		template<typename Cont>
+		constexpr auto is_container_v < Cont,
+			std::void_t<
+			decltype(std::declval<Cont>().begin()),
+			decltype(std::declval<Cont>().end()),
+			typename Cont::value_type,
+			decltype(std::declval<Cont>().push_back(typename Cont::value_type{}))
+			>
+		> = !std::is_same_v<Cont, std::string>;
 
+		struct toml_internal_data;
 		struct toml_data_deleter
 		{
 		public:
@@ -135,6 +162,19 @@ namespace another_toml
 		uint8_t offset_minutes;
 	};
 
+	namespace detail
+	{
+		template<typename T>
+		constexpr auto is_toml_type = std::is_same_v<T, std::int64_t> ||
+			std::is_same_v<T, double> ||
+			std::is_same_v<T, bool> ||
+			std::is_same_v<T, std::string> ||
+			std::is_same_v<T, date> ||
+			std::is_same_v<T, time> ||
+			std::is_same_v<T, local_date_time> ||
+			std::is_same_v<T, date_time>;
+	}
+
 	class node_iterator;
 
 	template<bool RootNode = false>
@@ -179,14 +219,43 @@ namespace another_toml
 		bool has_children() const noexcept;
 		std::vector<basic_node<>> get_children() const;
 		basic_node<> get_first_child() const;
+		bool has_sibling() const noexcept;
+		basic_node<> get_next_sibling() const;
+
+		// get child with the provided name
+		// test the return value using .good()
+		basic_node<> find_child(std::string_view) const;
+
+		// get table or inline table with the provided name
+		// throws key_not_found if the table doesn't exist
+		// or wrong_type if the name is being used for a non-table node
+		basic_node<> find_table(std::string_view) const;
+
+		// return the value of the provided key name
+		// requires that this node is a table or inline_table
+		// Both versions of this function throw wrong_type if
+		// 'T' is not able to store the value
+		// First version throws key_not_found
+		template<typename T>
+		T get_value(std::string_view key_name) const;
+		// Provide a default value to be returned if the key isnt found
+		template<typename T>
+		T get_value(std::string_view key_name, T default_return) const;
 
 		// iterator based interface
 		node_iterator begin() const noexcept;
 		node_iterator end() const noexcept;
 		// returns the number of child nodes
 		std::size_t size() const noexcept;
-
+		
+		// extract the value of this node as various types
+		// as_string can extract the names of tables, keys, arrays, array_tables
+		// and convert value nodes to string
 		std::string as_string() const;
+		// the following functions should only be called on nodes
+		// matching the value_type of the node
+		// this requires value() to return true and type() to return
+		// the type desired.
 		std::int64_t as_int() const;
 		double as_floating() const;
 		bool as_boolean() const;
@@ -194,6 +263,9 @@ namespace another_toml
 		local_date_time as_date_time_local() const;
 		date as_date_local() const;
 		time as_time_local() const;
+
+		template<typename T>
+		T as_t() const;
 
 		operator bool() const noexcept
 		{
@@ -406,5 +478,7 @@ namespace std
 		using iterator_category = std::forward_iterator_tag;
 	};
 }
+
+#include "another_toml.inl"
 
 #endif // !ANOTHER_TOML_HPP
