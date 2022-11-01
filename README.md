@@ -2,11 +2,12 @@
 Another TOML is a cpp parser and writer for TOML v1.0.
 Another TOML passes the tests at `BurntSushi/toml-test`.
 
-Another TOML can be used to parse a read toml files without exceptions, as long as you call
+Another TOML can be used to parse toml files without exceptions, as long as you call
 the functions to confirm that nodes are valid and the expected kind of toml element or value type.
 
 ## Usage
 The examples in this section are used to read this example toml file
+
 	title = "TOML Example"
 
 	[owner]
@@ -38,14 +39,14 @@ The examples in this section are used to read this example toml file
 	sku = 284758393
 	color = "gray"
 ### Parsing Example
-The following code can be used to reads the above toml file and extracts each of the values stored in it.
-The library is in the namespace another_toml. These examples operate as though the following namespace declaration
-was present near the top of the file so that we can access everything using a toml namespace
+The following code can be used to read the above toml file and extract each of the values stored in it.
+The library is in the namespace `another_toml`; however we will add the following namespace declaration
+so that we can access everything using `toml::`
 
 	#include "another_toml.hpp"
 	namespace toml = another_toml;
 	
-Parse a toml file by passing the toml content as a string, c string, or string_view.
+Parse a toml file by passing the toml content as a string, cstring, or string_view.
 
 	auto toml_str = std::string{ "...toml content..." };
 	auto toml_c_str = "...toml content...";
@@ -54,7 +55,7 @@ Parse a toml file by passing the toml content as a string, c string, or string_v
 	auto root_table = toml::parse(toml_c_str);
 	auto root_table = toml::parse(toml_sv);
 	
-Otherwise you can pass a stream that contains the file or a path to the file on the filesystem.
+Otherwise you can pass a stream that contains the toml document or a path to the file on the filesystem.
 
 	auto path = std::filesystem::path{ "./path/to/content.toml" };
 	auto root_table = toml::parse(std::cin);
@@ -63,13 +64,19 @@ Otherwise you can pass a stream that contains the file or a path to the file on 
 Parser functions will throw `another_toml::parser_error`
 You can also catch the more specific exception sub-types defined in another_toml.hpp
 
-You can pass `another_toml::no_throw` to request the parser to not throw exceptions.
-Parser may still throw standard library exceptions related to memory alloc or 
+You can pass `another_toml::no_throw` to request the parser not to throw exceptions.
+The parser may still throw standard library exceptions related to memory alloc or 
 stream/filesystem access(for the overloads that use these).
+
 Use `good()` to test if the returned node can be read from.
 
 	auto root_table = toml::parse(toml_str, toml::no_throw);
-	auto success = root_table.good();	
+	auto success = root_table.good();
+	
+The node returned by `another_toml::parse` is the **root node**. It stores all the parsed data and
+must remain in memory until you are finished reading the document.
+All the other nodes created while reading the document are lightweight references into the **root node**.
+If the root node is destroyed then calling any function on any of the other nodes will lead to undefined behaviour.
 	
 #### TOML Structure
 When a toml source is parsed, it is converted into a node tree structure and a root table node is returned. 
@@ -89,7 +96,7 @@ You can then call `get_next_sibling()` to access each of the other child nodes i
 	auto second_child = first_child.get_next_sibling();
 	auto third_child = second_child.get_next_sibling();
 
-Use `has_children` and `has_sibling()` to test if a node has any children, or if a child node has any sibling nodes
+Use `has_children` and `has_sibling()` to test if a node has any children, or if a child node has any remaining sibling nodes
 
 	if (root_table.has_chilren())
 	{
@@ -113,10 +120,10 @@ They correspond to the TOML element types of the same name.
 	auto success = first_child.key();
 	success = second_child.table();
 	
-If you don't check that a node is good, or that it is of the expected type then exceptions may be thrown by later functions
+If you don't check that a node is `good()`, or that it is of the expected type then exceptions may be thrown by later functions.
 
 #### Extract Values
-In order to find a specific node you will also need to examine its name. All node types can be converted into strings using `as_string`
+In order to find a specific node you will also need to examine its name. All node types can be converted into strings using `as_string`.
 
 	if(first_child.key())
 		auto key_name = first_child.as_string();
@@ -126,13 +133,13 @@ In order to find a specific node you will also need to examine its name. All nod
 Some nodes don't have names, such as arrays or inline tables that are nested within arrays.
 
 Once you have a value node you can convert it into a usable c++ type.
-TOML types correspond to the following c++ types when using this library:
+TOML types correspond to the following c++ types:
 - String: `std::string`
 - Integer: `std::int64_t`, int64 is used as it can hold the entire range required by the TOML standard
 - Float: `double`, double is used to preserve the precision level required by the TOML standard
 - Boolean: `bool`
 
-Another TOML includes types for storing TOML dates and times:
+Another TOML provides types for storing TOML dates and times:
 - Offset Date Time: `another_toml::date_time`
 - Local Date Time: `another_toml::local_date_time`
 - Local Date: `another_toml::date`
@@ -158,11 +165,11 @@ to get the value node.
 	auto title_key = root_node.get_first_child();
 	auto title_value = title_key.get_first_child();
 	
-We can confirm its type using `type()`
+We can confirm its type using `type()`.
 
 	auto correct_type = (title_value.type() == toml::value_type::string);
 
-And we can extract the message using `as_string()`
+And we can extract the message using `as_string()`.
 
 	auto title_str = title_value.as_string();
 	
@@ -177,7 +184,7 @@ Now we'll extract `[owner]` and its key `dob`.
 	auto dob_value = owner_dob.get_first_child();
 	
 Since we expect dob to be a date and time value we will use `as_date_time()` to extract it.
-We can also convert it(and any other type) into a string using `as_string()`
+We can also convert it(and any other type) into a string using `as_string()`.
 
 	auto dob = dob_value.as_date_time();
 	auto dob_str = dob_value.as_string();
@@ -205,7 +212,7 @@ cut out the boilerplate code needed to extract keys and their values.
 `get_value` will throw exceptions if the key is missing or if the value
 cannot be converted into the desired type.
 
-We can iterate over a nodes children to extract arrays
+We can iterate over a nodes children to extract arrays.
 
 	auto ports_key = database.find_child("ports");
 	auto ports_array = port_key.get_first_child();
@@ -213,11 +220,11 @@ We can iterate over a nodes children to extract arrays
 	for (auto elm : port_array)
 		ports.push_back(elm.as_integer());
 
-`get_value` can also be used to extract heterogeneous arrays directly into a container
+`get_value` can also be used to extract heterogeneous arrays directly into a container.
 
 	auto ports = database.get_value<std::vector<std::int64_t>>("ports");
 
-We can also extract all the child nodes as a `std::vector` using `get_children()`
+We can also extract all the child nodes as a `std::vector` using `get_children()`.
 
 	auto data_key = database.find_child("data");
 	auto data_array = data_key.get_first_child();
@@ -226,7 +233,7 @@ We can also extract all the child nodes as a `std::vector` using `get_children()
 	auto data_floats = elements[1].as_t<std::vector<double>>();
 
 #### Extracting Tables
-We can also extract inline tables using the helper function `find_table(std::string_view)`
+We can also extract inline tables using the helper function `find_table(std::string_view)`.
 
 		auto temp_targets = database.find_table("temp_targets");
 		auto temp_cpu = temp_targets.get_value<double>("cpu");
