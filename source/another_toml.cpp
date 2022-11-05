@@ -36,7 +36,7 @@ namespace another_toml
 		{
 			double value;
 			writer::float_rep rep;
-			std::uint8_t precision = 19;
+			std::int8_t precision = -1;
 		};
 
 		struct string_t
@@ -357,15 +357,21 @@ namespace another_toml
 			auto strm = std::ostringstream{};
 			if (d.rep == writer::float_rep::scientific &&
 				!options.simple_numerical_output)
-			{
-				strm << std::scientific << std::setprecision(d.precision) << d.value;
-				return strm.str();
-			}
+				strm << std::scientific;
+			else if (d.rep == writer::float_rep::fixed &&
+				!options.simple_numerical_output)
+				strm << std::fixed;
 
-			strm << std::fixed << std::setprecision(d.precision) << d.value;
+			if (d.precision > writer::auto_precision)
+				strm << std::setprecision(d.precision);
+	
+			strm << d.value;
 			auto str = strm.str();
-			if (str.find('.') == std::string::npos)
+
+			if (str.find('.') == std::string::npos &&
+				str.find('e') == std::string::npos)
 				str += ".0"s;
+
 			return str;
 		}
 
@@ -625,12 +631,11 @@ namespace another_toml
 		return;
 	}
 
-	void writer::begin_array_tables(std::string_view name)
+	void writer::begin_array_table(std::string_view name)
 	{
 		auto i = _stack.back();
 		const auto t = _data->nodes[i].type;
 		assert(t == node_type::table ||
-			t == node_type::inline_table ||
 			t == node_type::array_tables);
 
 		auto new_table = insert_child_table_array<false>(i, std::string{ name }, *_data);
@@ -638,7 +643,7 @@ namespace another_toml
 		_stack.emplace_back(new_table);
 	}
 
-	void writer::end_array_tables() noexcept
+	void writer::end_array_table() noexcept
 	{
 		assert(!empty(_stack));
 		auto i = _stack.back();
@@ -684,7 +689,7 @@ namespace another_toml
 		return new_node;
 	}
 
-	void writer::write_value(std::string value)
+	void writer::write_value(std::string&& value)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::move(value), false });
 		if (_data->nodes[_stack.back()].type == node_type::key)
@@ -692,9 +697,25 @@ namespace another_toml
 		return;
 	}
 
-	void writer::write_value(std::string value, literal_t)
+	void writer::write_value(std::string&& value, literal_t)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::move(value), true });
+		if (_data->nodes[_stack.back()].type == node_type::key)
+			_stack.pop_back();
+		return;
+	}
+
+	void writer::write_value(std::string_view value)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::string{ value }, false });
+		if (_data->nodes[_stack.back()].type == node_type::key)
+			_stack.pop_back();
+		return;
+	}
+
+	void writer::write_value(std::string_view value, literal_t)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::string{ value }, true });
 		if (_data->nodes[_stack.back()].type == node_type::key)
 			_stack.pop_back();
 		return;
@@ -708,7 +729,7 @@ namespace another_toml
 		return;
 	}
 
-	void writer::write_value(double value, float_rep rep, std::uint8_t precision)
+	void writer::write_value(double value, float_rep rep, std::int8_t precision)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::floating_point, detail::floating{ value, rep, precision });
 		if(_data->nodes[_stack.back()].type == node_type::key) 
@@ -756,11 +777,18 @@ namespace another_toml
 		return;
 	}
 
+	void writer::write(std::string_view key, double value, float_rep rep, std::int8_t precision)
+	{
+		write_key(key);
+		write_value(value, rep, precision);
+		return;
+	}
+
 	std::string writer::to_string() const
 	{
 		auto sstream = std::ostringstream{};
 		sstream << *this;
-		return sstream.str();
+		return std::move(sstream).str();
 	}
 
 	// Returns true if a table header should be written for i
@@ -847,12 +875,26 @@ namespace another_toml
 		return tables;
 	}
 
-	bool optional_newline(std::ostream& strm, std::streampos& last_newline, const writer_options& o)
+	using char_count_t = std::int16_t;
+	
+	void append_line_length(char_count_t& line, std::size_t length, const writer_options& o) noexcept
 	{
-		if (strm.tellp() - last_newline > o.array_line_length)
+		if (length > o.array_line_length)
+			line = o.array_line_length + 1;
+		else
+			line += static_cast<char_count_t>(length);
+
+		if (line > o.array_line_length)
+			line = o.array_line_length + 1;
+		return;
+	}
+
+	bool optional_newline(std::ostream& strm, char_count_t& last_newline, const writer_options& o)
+	{
+		if (last_newline > 0 && last_newline > o.array_line_length)
 		{
 			strm << '\n';
-			last_newline = strm.tellp();
+			last_newline = {};
 			return true;
 		}
 		return false;
@@ -860,18 +902,23 @@ namespace another_toml
 
 	using indent_level_t = std::int32_t;
 
-	void optional_indentation(std::ostream& strm, indent_level_t indent, const writer_options& o)
+	void optional_indentation(std::ostream& strm, indent_level_t indent, const writer_options& o,
+		char_count_t& last_newline_dist)
 	{
 		if (o.indent_child_tables)
 		{
 			for (auto i = indent_level_t{}; i < indent; ++i)
+			{
 				strm << o.indent_string;
+				const auto str_size = size(o.indent_string);
+				append_line_length(last_newline_dist, str_size, o);
+			}
 		}
 	}
 
 	template<bool WriteOne>
 	static void write_children(std::ostream& strm, const toml_internal_data& d,
-		const writer_options& o, std::vector<index_t> stack, std::streampos& last_newline,
+		const writer_options& o, std::vector<index_t> stack, char_count_t& last_newline_dist,
 		indent_level_t indent_level)
 	{
 		assert(!empty(stack));
@@ -905,29 +952,28 @@ namespace another_toml
 				if (parent_type != node_type::array_tables && 
 					(is_headered_table(*beg, d) || c_ref.child == bad_index))
 				{
-					if (last_newline != std::streampos{} &&
-						size(stack) < 2 &&
-						!o.compact_spacing)
-					{
-						strm << '\n';
-						last_newline = strm.tellp();
-					}
-
 					// skip if all their children are also tables
 					// skip writing empty tables unless they are leafs
 					if (o.skip_empty_tables && skip_table_header(*beg, c_ref.child, d))
 					{
-						write_children<false>(strm, d, o, name_stack, last_newline, indent_level);
+						write_children<false>(strm, d, o, name_stack, last_newline_dist, indent_level);
 						break;
 					}
 
-					optional_indentation(strm, indent, o);
+					if (last_newline_dist != -1 &&
+						!o.compact_spacing)
+					{
+						strm << '\n';
+						last_newline_dist = {};
+					}
+
+					optional_indentation(strm, indent, o, last_newline_dist);
 
 					strm << '[' << make_table_name(name_stack, d, o) << "]\n"s;
-					last_newline = strm.tellp();
+					last_newline_dist = {};
 				}
 
-				write_children<false>(strm, d, o, std::move(name_stack), last_newline, indent);
+				write_children<false>(strm, d, o, std::move(name_stack), last_newline_dist, indent);
 			} break;
 			case node_type::array:
 			{
@@ -937,37 +983,60 @@ namespace another_toml
 
 				if (parent_type != node_type::array)
 				{
-					optional_indentation(strm, indent_level, o);
+					optional_indentation(strm, indent_level, o, last_newline_dist);
 
 					strm << escape_toml_name(c_ref.name, o.ascii_output);
 					if (o.compact_spacing)
+					{
 						strm << '=';
+						last_newline_dist += 1;
+					}
 					else
+					{
 						strm << " = ";
+						last_newline_dist += 3;
+					}
 				}
 
 				strm << '[';
+				++last_newline_dist;
 				if (!o.compact_spacing)
+				{
 					strm << ' ';
+					++last_newline_dist;
+				}
 
-				if (optional_newline(strm, last_newline, o))
-					optional_indentation(strm, indent_level, o);
+				if (optional_newline(strm, last_newline_dist, o))
+					optional_indentation(strm, indent_level, o, last_newline_dist);
 
-				write_children<false>(strm, d, o, { *beg }, last_newline, indent_level);
+				write_children<false>(strm, d, o, { *beg }, last_newline_dist, indent_level);
 
 				strm << ']';
+				++last_newline_dist;
 				if (parent_type == node_type::table)
+				{
 					strm << '\n';
+					last_newline_dist = {};
+				}
 				else if (parent_type == node_type::array &&
 					next(beg) != end)
 				{
 					if (!o.compact_spacing)
+					{
 						strm << ", "s;
+						last_newline_dist += 2;
+					}
 					else
+					{
 						strm << ',';
+						++last_newline_dist;
+					}
 				}
 				else if (!o.compact_spacing)
+				{
 					strm << ' ';
+					++last_newline_dist;
+				}
 			} break;
 			case node_type::array_tables:
 			{
@@ -979,20 +1048,20 @@ namespace another_toml
 				const auto child_end = std::end(child_tables);
 				for(auto beg = begin(child_tables); beg != child_end; ++beg)
 				{
-					if (last_newline != std::streampos{} &&
+					if (last_newline_dist != -1 &&
 						size(stack) < 2 &&
 						!o.compact_spacing)
 					{
 						strm << '\n';
-						last_newline = strm.tellp();
+						last_newline_dist = {};
 					}
 
-					optional_indentation(strm, indent, o);
+					optional_indentation(strm, indent, o, last_newline_dist);
 
 					strm << "[["s << make_table_name(name_stack, d, o) << "]]\n"s;
-					last_newline = strm.tellp();
+					last_newline_dist = {};
 					name_stack.emplace_back(*beg);
-					write_children<false>(strm, d, o, name_stack, last_newline, indent);
+					write_children<false>(strm, d, o, name_stack, last_newline_dist, indent);
 					name_stack.pop_back();
 				}
 			} break;
@@ -1001,31 +1070,48 @@ namespace another_toml
 				assert(parent_type == node_type::table ||
 					parent_type == node_type::inline_table);
 
-				optional_indentation(strm, indent_level, o);
+				optional_indentation(strm, indent_level, o, last_newline_dist);
 
 				//key_name
-				strm << escape_toml_name(c_ref.name, o.ascii_output);
+				const auto key_name = escape_toml_name(c_ref.name, o.ascii_output);
+				append_line_length(last_newline_dist, size(key_name), o);
+				strm << key_name;
 				if (!o.compact_spacing)
+				{
 					strm << " = "s;
+					last_newline_dist += 3;
+				}
 				else
+				{
 					strm << '=';
+					++last_newline_dist;
+				}
 
 				//value
-				write_children<true>(strm, d, o, { *beg }, last_newline, indent_level);
+				write_children<true>(strm, d, o, { *beg }, last_newline_dist, indent_level);
 
 				if (parent_type == node_type::inline_table)
 				{
 					if (o.compact_spacing)
 					{
 						if (next(beg) != end)
+						{
 							strm << ',';
+							++last_newline_dist;
+						}
 					}
 					else
 					{
 						if (next(beg) != end)
+						{
 							strm << ", "s;
+							last_newline_dist += 2;
+						}
 						else
+						{
 							strm << ' ';
+							++last_newline_dist;
+						}
 					}
 
 					//TOML1.x allow newlines in inline tables just like arrays
@@ -1034,7 +1120,7 @@ namespace another_toml
 				else
 				{
 					strm << '\n';
-					last_newline = strm.tellp();
+					last_newline_dist = {};
 				}
 			} break;
 			case node_type::inline_table:
@@ -1045,36 +1131,67 @@ namespace another_toml
 
 				if (parent_type != node_type::array)
 				{
-					optional_indentation(strm, indent_level, o);
+					optional_indentation(strm, indent_level, o, last_newline_dist);
 
-					strm << escape_toml_name(c_ref.name, o.ascii_output);
-					if (o.compact_spacing)
+					const auto table_name = escape_toml_name(c_ref.name, o.ascii_output);
+					append_line_length(last_newline_dist, size(table_name), o);
+					strm << table_name;
+					if (!o.compact_spacing)
+					{
 						strm << " = "s;
+						last_newline_dist += 3;
+					}
 					else
+					{
 						strm << '=';
+						++last_newline_dist;
+					}
 				}
 
 				if (!o.compact_spacing)
+				{
 					strm << "{ "s;
+					last_newline_dist += 2;
+				}
 				else
+				{
 					strm << '{';
+					++last_newline_dist;
+				}
 
-				write_children<false>(strm, d, o, { *beg }, last_newline, indent_level);
+				write_children<false>(strm, d, o, { *beg }, last_newline_dist, indent_level);
 
 				if (!o.compact_spacing)
+				{
 					strm << "} "s;
+					last_newline_dist += 2;
+				}
 				else
+				{
 					strm << '}';
+					++last_newline_dist;
+				}
 
 				if (parent_type != node_type::table &&
 					next(beg) != end)
 				{
 					if (o.compact_spacing)
+					{
 						strm << ',';
+						++last_newline_dist;
+					}
 					else
+					{
 						strm << ", "s;
+						last_newline_dist += 2;
+					}
 
-					optional_newline(strm, last_newline, o);
+					optional_newline(strm, last_newline_dist, o);
+				}
+				else
+				{
+					strm << '\n';
+					last_newline_dist = {};
 				}
 			} break;
 			case node_type::value:
@@ -1091,12 +1208,14 @@ namespace another_toml
 						const auto str = o.ascii_output ? to_escaped_string2(c_ref.name) : to_escaped_string(c_ref.name);
 						strm.write(data(str), size(str));
 						strm << '\"';
+						append_line_length(last_newline_dist, 2 + size(str), o);
 					}
 					else
 					{
 						strm << '\'';
 						strm.write(data(c_ref.name), size(c_ref.name));
 						strm << '\'';
+						append_line_length(last_newline_dist, 2 + size(c_ref.name), o);
 					}
 				}
 				else if (c_ref.v_type == value_type::bad ||
@@ -1106,6 +1225,7 @@ namespace another_toml
 				{
 					const auto str = std::visit(to_string_visitor{ o }, c_ref.value);
 					strm << str;
+					append_line_length(last_newline_dist, size(str), o);
 				}
 
 				if (parent_type == node_type::array)
@@ -1113,17 +1233,26 @@ namespace another_toml
 					if (o.compact_spacing)
 					{
 						if (next(beg) != end)
+						{
 							strm << ',';
+							++last_newline_dist;
+						}
 					}
 					else
 					{
 						if (next(beg) != end)
+						{
 							strm << ", "s;
+							last_newline_dist += 2;
+						}
 						else
+						{
 							strm << ' ';
+							++last_newline_dist;
+						}
 					}
 
-					optional_newline(strm, last_newline, o);
+					optional_newline(strm, last_newline_dist, o);
 				}
 				
 				if constexpr (WriteOne)
@@ -1148,9 +1277,9 @@ namespace another_toml
 				o.put(static_cast<char>(ch));
 		}
 
-		auto pos = o.tellp();
-		write_children<false>(o, *w._data, w._opts, { 0 }, pos, -1);
-		
+		auto last_newline = char_count_t{ -1 };
+		write_children<false>(o, *w._data, w._opts, { 0 }, last_newline, -1);
+
 		return o;
 	}
 

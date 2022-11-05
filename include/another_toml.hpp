@@ -85,17 +85,29 @@ namespace another_toml
 		using index_t = std::size_t;
 		constexpr auto bad_index = std::numeric_limits<detail::index_t>::max();
 
+		template<typename Range, typename = void>
+		constexpr auto is_range_v = false;
+		template<typename Range>
+		constexpr auto is_range_v<Range,
+			std::void_t<
+			decltype(std::declval<Range>().begin()),
+			decltype(std::declval<Range>().end())
+			>
+		> = !std::is_same_v<Range, std::string>;
+
 		template<typename Cont, typename = void>
 		constexpr auto is_container_v = false;
 		template<typename Cont>
-		constexpr auto is_container_v < Cont,
+		constexpr auto is_container_v<Cont,
 			std::void_t<
-			decltype(std::declval<Cont>().begin()),
-			decltype(std::declval<Cont>().end()),
 			typename Cont::value_type,
 			decltype(std::declval<Cont>().push_back(typename Cont::value_type{}))
 			>
 		> = !std::is_same_v<Cont, std::string>;
+
+		template<typename Integral>
+		constexpr auto is_integral_v = std::is_integral_v<Integral> &&
+			!std::is_same_v<Integral, bool>;
 
 		struct toml_internal_data;
 		struct toml_data_deleter
@@ -138,28 +150,31 @@ namespace another_toml
 
 	struct date
 	{
-		std::uint16_t year;
-		std::uint8_t month, day;
+		std::uint16_t year = {};
+		std::uint8_t month = {},
+			day = {};
 	};
 
 	struct time
 	{
-		std::int8_t hours, minutes, seconds;
-		float seconds_frac;
+		std::int8_t hours = {},
+			minutes = {},
+			seconds = {};
+		float seconds_frac = {};
 	};
 
 	struct local_date_time
 	{
-		date date;
-		time time;
+		date date = {};
+		time time = {};
 	};
 
 	struct date_time
 	{
-		local_date_time datetime;
-		bool offset_positive;
-		uint8_t offset_hours;
-		uint8_t offset_minutes;
+		local_date_time datetime = {};
+		bool offset_positive = {};
+		uint8_t offset_hours = {};
+		uint8_t offset_minutes = {};
 	};
 
 	namespace detail
@@ -361,7 +376,8 @@ namespace another_toml
 	struct writer_options
 	{
 		// how many characters before splitting next array element to new line
-		int array_line_length = 80;
+		// set to 0 to never split
+		std::int16_t array_line_length = 80;
 		// if true, avoids unrequired whitespace eg: name = value -> name=value
 		bool compact_spacing = false;
 		// add an indentation level for each child table
@@ -377,7 +393,7 @@ namespace another_toml
 		// ignore per value override specifiers where possible
 		// (eg. all ints output in base 10, floats in normal mode rather than scientific)
 		bool simple_numerical_output = false;
-		// write a utf-8 BOM into the start of the stream(not required)
+		// write a utf-8 BOM into the start of the stream
 		bool utf8_bom = false;
 	};
 
@@ -410,21 +426,35 @@ namespace another_toml
 
 		// begin an array of tables
 		// [[array]]
-		// keep calling begin_array_tables with the same name
+		// keep calling begin_array_table with the same name
 		// to add new tables to the array
-		void begin_array_tables(std::string_view);
-		void end_array_tables() noexcept;
+		void begin_array_table(std::string_view);
+		void end_array_table() noexcept;
 
 		// write values on their own, for arrays
 		void write_key(std::string_view);
 
-
 		struct literal_t {};
 		static constexpr auto literal_string_tag = literal_t{};
 
-		void write_value(std::string value);
+		void write_value(std::string&& value);
 		// pass literal string tag to mark a string as being a literal
-		void write_value(std::string value, literal_t);
+		void write_value(std::string&& value, literal_t);
+
+		void write_value(std::string_view value);
+		void write_value(std::string_view value, literal_t);
+
+		void write_value(const char* value)
+		{
+			write_value(std::string_view{ value });
+			return;
+		}
+
+		void write_value(const char* value, literal_t l)
+		{
+			write_value(std::string_view{ value }, l);
+			return;
+		}
 
 		enum class int_base : std::uint8_t
 		{
@@ -436,18 +466,75 @@ namespace another_toml
 
 		void write_value(std::int64_t value, int_base = int_base::dec);
 
+		template<typename Integral,
+			std::enable_if_t<detail::is_integral_v<Integral>, int> = 0>
+		void write_value(Integral i, int_base = int_base::dec);
+
 		enum class float_rep : std::uint8_t
 		{
-			normal,
+			default,
+			fixed,
 			scientific
 		};
 
-		void write_value(double value, float_rep = float_rep::normal, std::uint8_t precision = 6);
+		static constexpr auto auto_precision = std::int8_t{ -1 };
+
+		void write_value(double value, float_rep = float_rep::default, std::int8_t precision = auto_precision);
 		void write_value(bool value);
 		void write_value(date_time value);
 		void write_value(local_date_time value);
 		void write_value(date value);
 		void write_value(time value);
+
+		// Write a key value pair.
+		template<typename T>
+		void write(std::string_view key, T&& value);
+
+		// Allowing passing string_literal_tag when using the above template method.
+		template<typename String,
+			std::enable_if_t<std::is_convertible_v<String, std::string_view>, int> = 0>
+		void write(std::string_view key, String&& value, literal_t);
+		// Array write for strings
+		template<typename Container,
+			std::enable_if_t<detail::is_range_v<Container> &&
+			std::is_convertible_v<typename Container::value_type, std::string_view>, int> = 0>
+		void write(std::string_view key, Container&& value, literal_t);
+		// Allowing passing an integral base when using the above template method.
+		template<typename Integral, 
+			std::enable_if_t<detail::is_integral_v<Integral>, int> = 0>
+		void write(std::string_view key, Integral value, int_base);
+		// Array write for integrals
+		template<typename Container,
+			std::enable_if_t<detail::is_range_v<Container> &&
+			detail::is_integral_v<typename Container::value_type>, int> = 0>
+		void write(std::string_view key, Container value, int_base);
+		// 'write' overload for floating point types
+		void write(std::string_view key, double value,
+			float_rep representation, std::int8_t precision = auto_precision);
+		// Array write for floating point types
+		template<typename Container,
+			std::enable_if_t<detail::is_range_v<Container>&&
+			std::is_convertible_v<typename Container::value_type, double>, int> = 0>
+		void write(std::string_view key, Container value,
+			float_rep representation, std::int8_t precision = auto_precision);
+
+		// Overload to support initializer_list
+		template<typename T>
+		void write(std::string_view key, std::initializer_list<T> value);
+		// initializer_list String options support
+		template<typename String,
+			std::enable_if_t<std::is_convertible_v<String, std::string_view>, int> = 0>
+		void write(std::string_view key, std::initializer_list<String> value, literal_t);
+		// initializer_list Integral options support
+		template<typename Integral,
+			std::enable_if_t<detail::is_integral_v<Integral>, int> = 0>
+		void write(std::string_view key, std::initializer_list<Integral> value, int_base);
+		// initializer_list Integral options support
+		template<typename Floating,
+			std::enable_if_t<std::is_convertible_v<Floating, double>, int> = 0>
+		void write(std::string_view key, std::initializer_list<Floating> value,
+			float_rep representation, std::int8_t precision = auto_precision);
+
 
 		void set_options(writer_options o)
 		{

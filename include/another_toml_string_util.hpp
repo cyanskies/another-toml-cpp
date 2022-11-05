@@ -22,7 +22,7 @@ namespace another_toml
 	struct parse_float_string_return
 	{
 		double value;
-		writer::float_rep representation = writer::float_rep::normal;
+		writer::float_rep representation = writer::float_rep::default;
 
 		enum class error_t : std::uint8_t
 		{

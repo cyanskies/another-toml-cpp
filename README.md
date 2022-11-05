@@ -1,6 +1,6 @@
 # Another TOML
 Another TOML is a cpp parser and writer for TOML v1.0.
-Another TOML passes the tests at `BurntSushi/toml-test`.
+Another TOML passes the tests at `BurntSushi/toml-test`(as of v1.2.0).
 
 Another TOML can be used to parse toml files without exceptions, as long as you call
 the functions to confirm that nodes are valid and the expected kind of toml element or value type.
@@ -38,6 +38,10 @@ The examples in this section are used to read this example toml file
 	name = "Nail"
 	sku = 284758393
 	color = "gray"
+
+Another TOML is designed to read ASCII and UTF-8 encoded files, it will ignore the UTF-8 BOM if encountered
+but will not protect against being given files in an unexpected encoding(at least not until they are interpreted as invalid TOML).
+
 ### Parsing Example
 The following code can be used to read the above toml file and extract each of the values stored in it.
 The library is in the namespace `another_toml`; however we will add the following namespace declaration
@@ -282,6 +286,266 @@ return an empty string.
 				new_product.color = sku.get_first_child().as_string();
 			product_vect.emplace_back(new_product);			
 		}
+
+### Generating a TOML Document
+Another TOML can also output TOML documents, we'll generate the example document near the top
+of this file. We use `another_toml::writer` to describe out document and then write it out.
+	
+	auto w = toml::writer{};
+
+#### Writing Keys and Values
+The writer automatically creates the root level table for you, so we can add keys to it
+straight away with `write_key(std::string_view)`
+
+	w.write_key("title");
+
+After `write_key` we need to submit a value to the writer with `write_value`. 
+Writer is expecting a value to follow the key, calling a different function
+at this point is an error.
+This function accepts any of the TOML types listed earlier in this article.
+
+	w.write_value("TOML Example");
+
+#### Writing Tables
+We can add a table with `begin_table(std::string_view)` everything added after
+`begin_table()` will be nested within the table. The table must be eventually ended
+with `end_table()`.
+
+	w.begin_table("owner");
+
+A shorthand is provided for adding a key and value together. Call `write` with
+both a key and a value.
+
+	w.write("name", "Tom Preston-Werner");
+	w.write("dob", toml::date_time{
+		toml::local_date_time{
+			toml::date{	1979, 5, 27	},
+			toml::time{ 7, 32 }
+		}, false, 8 });
+
+Now we can end the 'owner' table.
+
+	w.end_table();
+
+Next we'll write the 'database' table
+
+	w.begin_table("database");
+	w.write("enabled", true);
+
+#### Writing Arrays
+We can write arrays by starting and ending the array with
+`begin_array(std::string_view)` and `end_array()`.
+Inbetween the begining and end of the array we can add values and
+also nest additional arrays and inline tables.
+
+	w.begin_array("ports");
+	w.write_value(8000);
+	w.write_value(8001);
+	w.write_value(8002);
+	w.end_array();
+
+You can also write heterogeneous arrays by passing a container
+to the `write` function.
+
+	const auto ports = std::vector{
+		8000, 8001, 8002
+	};
+	w.write("ports", ports);
+
+When nesting arrays and inline tables within arrays you still use
+the same interface as before, however when nested within an array
+these elements don't have a name, you can leave the name parameter blank
+by passing `{}`.
+
+We can use the shorthand to nest this array of strings.
+
+	w.begin_array("data");
+	w.write({}, { "delta", "phi" });
+
+Or use the 'begin'/'end array' functions.
+
+	w.begin_array({});
+	w.write_value(3.14f);
+	w.end_array();
+	w.end_array(); // data
+
+#### Writing Inline Tables
+Inline tables work the same way as normal tables, except they are started
+and finished with `begin_inline_table(std::string_view)` and `end_inline_table()`
+
+	w.begin_inline_table("temp_targets");
+	w.write("cpu",79.5);
+	w.write("case", 72.f);
+	w.end_inline_table();
+
+We'll end the 'database' table, and start a 'servers' table
+
+	w.end_table(); // [database]
+
+	w.begin_table("servers");
+
+We can leave this table empty and add two nested tables using what
+we've already learned and also end the 'servers' table.
+
+	w.begin_table("alpha");
+	w.write("ip", "10.0.0.1");
+	w.write("role", "frontend");
+	w.end_table();
+
+	w.begin_table("beta");
+	w.write("ip", "10.0.0.2");
+	w.write("role", "backend");
+	w.end_table();
+
+	w.end_table(); // [servers]
+
+#### Writing Arrays of Tables
+Arrays of tables use a similar syntax to tables, however we begin and end the tables
+with `begin_array_tables(std::string_view)` and `end_array_tables()`.
+
+	w.begin_array_tables("products");
+	w.write("name", "Hammer");
+	w.write("sku", 738594937);
+	w.end_array_table();
+
+Any of the TOML elements that use begin/end functions can be left empty
+by calling their end function without adding anything between them.
+
+	w.begin_array_tables("products");
+	w.end_array_table();
+
+Everything added to a table within the table array is nested
+solely within that table.
+
+	w.begin_array_tables("products");
+	w.write("name", "Nail");
+	w.write("sku", 284758393);
+	w.write("color", "grey");
+	w.end_array_table();
+
+#### Outputting the Completed Document
+You must end any open tables/arrays or inline arrays before generating the
+TOML document. You can use `to_string()` to generate a `std::string` containing
+the TOML document or you can stream it to any standard output stream.
+
+	auto toml_str = w.to_string(); // make a string variable
+	std::cout << w; // stream out to the console
+
+### Writer Output Options
+The output formating can be controlled as explained below.
+
+#### String Output Options
+When writing string values you can specify that they should be written as literal strings
+by adding `literal_string_tag` to the function call.
+
+	w.write_value("literal\n \nstring", toml::writer::literal_string_tag);
+
+#### Integral Output Options
+You can control the base representation of an integral type with the
+`int_base` parameter
+
+	w.write_value(50, toml::writer::int_base::bin);
+
+The supported bases are:
+* bin: binary
+* oct: octal
+* dec: decimal
+* hex: hexadecimal
+
+#### Floating Point Output Options
+You can control the base representation of a floating point type with the
+`float_rep` and `precision` parameter
+
+	w.write_value(50, toml::writer::float_rep::scientific, 6);
+
+The supported representations are:
+* default: notation will be chose based on the floats value
+* fixed: fractional notation(eg. 3.14)
+* scientific: scientific notation(eg. 10e-4)
+
+Precision controls how many decimal places of precision will be written. Pass
+`writer::auto_precision` to have it chosen dynamically.
+
+#### Key/Value Options
+The above output settings can also be used with the `write` shorthand, this even works
+when writing out arrays.
+
+	w.write("color", "grey", toml::writer::literal_string_tag);
+	w.write("floats", { 1.2f, 1.2f, 1.2f }, toml::writer::float_rep::scientific);
+	
+#### Global Writer Options
+More settings for controlling writer output can be controlled by passing a `writer_options`
+struct to your writer. `writer_options` is default contructed with the settings that
+writer uses by default. A description of each setting is below:
+##### Array Line Length
+Set `writer_options::array_line_length`
+How many characters an output line should have before splitting.
+
+	line_length_short = [
+	1, 2, 3, 4, 5, 6,
+	7, 8, 9, 10 ]
+
+##### Compact Spacing
+Set `writer_options::compact_spacing`
+If enabled the writer will skip any optional whitespace, can be used
+to reduce document size at the cost of readability(doesn''t effect array line splitting).
+
+	compact_spacing_off = [ 1, 2, 3]
+	compact_spacing_on=[1,2,3]
+
+##### Indent Child Tables
+Set `writer_options::indent_child_tables`
+If enabled adds an indentation of each layer of child table
+
+	[a]
+		[a.b]
+			[a.b.c]
+
+	#indentation isn't added for skipped tables(see skip empty tables)
+	[x.y.z]
+
+##### Indent String
+Set `writer_options::indent_string`
+This string is used to indent lines, you can replace it
+to control how much indentation is used.
+
+	auto opts = toml::writer_options{};
+	opts.indent_string = "nnnnnn";
+	auto w = toml::writer{};
+	w.set_options(opts);
+
+	#document output
+	[a]
+	nnnnnn[a.b]
+	nnnnnnnnnnnn[a.b.c]
+
+##### Ascii Output
+Set `writer_options::ascii_output`
+Output only ascii characters, unicode characters will be replaced by
+escape sequences.
+
+##### Skip Empty Tables
+Set `writer_options::skip_empty_tables`
+Don't output empty tables, unless they are the leaf tables.
+
+	[a]
+
+	[x.y.z]
+
+	[q]
+	count = 5
+	[q.w.e]
+
+##### Simple Numerical Output
+Set `writer_options::simple_numerical_output`
+If set, overrides any output options set when calling `write` or `write_value`
+with integrals and floats, instead writes them out in base 10 and fixed notation.
+
+##### UTF-8 Byte Order Mark
+Set `writer_options::utf8_bom`
+If set, the output will include a UTF-8 BOM at the beginning. Enable this
+only if you expect the output to be read by a program that uses the BOM to detect 
+encoding, or refuses to accept UTF-8 encoded files without a BOM.
 
 ## Installing
 Include Another TOML as a git submodule and configure it using cmake.
