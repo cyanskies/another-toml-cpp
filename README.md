@@ -262,30 +262,30 @@ Arrays of tables work just like a normal array, except the child nodes are all t
 The tables in the array don't have names, when you iterate through them `as_string()` will
 return an empty string.
 
-		auto products_array = root_table.find_child("products");
-		struct product
-		{
-			std::string name;
-			std::int64_t sku;
-			std::string color;
-		}
-		
-		auto product_vect = std::vector<product>{};
-		
-		for (auto table_elm : products_array)
-		{
-			auto new_poduct = product{};
-			auto name = table_elm.find_child("name");
-			if(name.good())
-				new_product.name = name.get_first_child().as_string();
-			auto sku = table_elm.find_child("sku");
-			if(sku.good())
-				new_product.sky = sku.get_first_child().as_integer();
-			auto color = table_elm.find_child("color");
-			if(color.good())
-				new_product.color = sku.get_first_child().as_string();
-			product_vect.emplace_back(new_product);			
-		}
+	auto products_array = root_table.find_child("products");
+	struct product
+	{
+		std::string name;
+		std::int64_t sku;
+		std::string color;
+	}
+
+	auto product_vect = std::vector<product>{};
+
+	for (auto table_elm : products_array)
+	{
+		auto new_poduct = product{};
+		auto name = table_elm.find_child("name");
+		if(name.good())
+			new_product.name = name.get_first_child().as_string();
+		auto sku = table_elm.find_child("sku");
+		if(sku.good())
+			new_product.sky = sku.get_first_child().as_integer();
+		auto color = table_elm.find_child("color");
+		if(color.good())
+			new_product.color = sku.get_first_child().as_string();
+		product_vect.emplace_back(new_product);			
+	}
 
 ### Generating a TOML Document
 Another TOML can also output TOML documents, we'll generate the example document near the top
@@ -295,7 +295,7 @@ of this file. We use `another_toml::writer` to describe out document and then wr
 
 #### Writing Keys and Values
 The writer automatically creates the root level table for you, so we can add keys to it
-straight away with `write_key(std::string_view)`
+straight away with `write_key(std::string_view)`.
 
 	w.write_key("title");
 
@@ -327,7 +327,7 @@ Now we can end the 'owner' table.
 
 	w.end_table();
 
-Next we'll write the 'database' table
+Next we'll write the 'database' table.
 
 	w.begin_table("database");
 	w.write("enabled", true);
@@ -371,14 +371,14 @@ Or use the 'begin'/'end array' functions.
 
 #### Writing Inline Tables
 Inline tables work the same way as normal tables, except they are started
-and finished with `begin_inline_table(std::string_view)` and `end_inline_table()`
+and finished with `begin_inline_table(std::string_view)` and `end_inline_table()`.
 
 	w.begin_inline_table("temp_targets");
 	w.write("cpu",79.5);
 	w.write("case", 72.f);
 	w.end_inline_table();
 
-We'll end the 'database' table, and start a 'servers' table
+We'll end the 'database' table, and start a 'servers' table.
 
 	w.end_table(); // [database]
 
@@ -442,26 +442,26 @@ by adding `literal_string_tag` to the function call.
 
 #### Integral Output Options
 You can control the base representation of an integral type with the
-`int_base` parameter
+`int_base` parameter.
 
 	w.write_value(50, toml::writer::int_base::bin);
 
 The supported bases are:
-* bin: binary
-* oct: octal
-* dec: decimal
-* hex: hexadecimal
+* **bin**: binary
+* **oct**: octal
+* **dec**: decimal
+* **hex**: hexadecimal
 
 #### Floating Point Output Options
 You can control the base representation of a floating point type with the
-`float_rep` and `precision` parameter
+`float_rep` and `precision` parameter.
 
 	w.write_value(50, toml::writer::float_rep::scientific, 6);
 
 The supported representations are:
-* default: notation will be chose based on the floats value
-* fixed: fractional notation(eg. 3.14)
-* scientific: scientific notation(eg. 10e-4)
+* **default**: notation will be chose based on the floats value
+* **fixed**: fractional notation(eg. 3.14)
+* **scientific**: scientific notation(eg. 10e-4)
 
 Precision controls how many decimal places of precision will be written. Pass
 `writer::auto_precision` to have it chosen dynamically.
@@ -477,8 +477,10 @@ when writing out arrays.
 More settings for controlling writer output can be controlled by passing a `writer_options`
 struct to your writer. `writer_options` is default contructed with the settings that
 writer uses by default. A description of each setting is below:
+
 ##### Array Line Length
-Set `writer_options::array_line_length`
+Set `writer_options::array_line_length`.
+
 How many characters an output line should have before splitting.
 
 	line_length_short = [
@@ -486,7 +488,8 @@ How many characters an output line should have before splitting.
 	7, 8, 9, 10 ]
 
 ##### Compact Spacing
-Set `writer_options::compact_spacing`
+Set `writer_options::compact_spacing`.
+
 If enabled the writer will skip any optional whitespace, can be used
 to reduce document size at the cost of readability(doesn''t effect array line splitting).
 
@@ -494,8 +497,9 @@ to reduce document size at the cost of readability(doesn''t effect array line sp
 	compact_spacing_on=[1,2,3]
 
 ##### Indent Child Tables
-Set `writer_options::indent_child_tables`
-If enabled adds an indentation of each layer of child table
+Set `writer_options::indent_child_tables`.
+
+If enabled adds an indentation of each layer of child table, the indentation is a single tab('\t') character by default.
 
 	[a]
 		[a.b]
@@ -505,9 +509,13 @@ If enabled adds an indentation of each layer of child table
 	[x.y.z]
 
 ##### Indent String
-Set `writer_options::indent_string`
+Set `writer_options::indent_string`.
+
 This string is used to indent lines, you can replace it
-to control how much indentation is used.
+to control how much indentation is used. Most users will 
+leave it as a tab character or replace it with the desired
+number of spaces. If you don't want any indentation then disable
+**indent child tables**.
 
 	auto opts = toml::writer_options{};
 	opts.indent_string = "nnnnnn";
@@ -520,29 +528,34 @@ to control how much indentation is used.
 	nnnnnnnnnnnn[a.b.c]
 
 ##### Ascii Output
-Set `writer_options::ascii_output`
+Set `writer_options::ascii_output`.
+
 Output only ascii characters, unicode characters will be replaced by
 escape sequences.
 
 ##### Skip Empty Tables
-Set `writer_options::skip_empty_tables`
-Don't output empty tables, unless they are the leaf tables.
+Set `writer_options::skip_empty_tables`.
 
-	[a]
+Don't output empty tables, unless they are leaf tables.
 
-	[x.y.z]
+	[a] # leaf table
+
+	[x.y.z] # leaf table
 
 	[q]
 	count = 5
-	[q.w.e]
+	
+		[q.w.e] # leaf table
 
 ##### Simple Numerical Output
-Set `writer_options::simple_numerical_output`
+Set `writer_options::simple_numerical_output`.
+
 If set, overrides any output options set when calling `write` or `write_value`
 with integrals and floats, instead writes them out in base 10 and fixed notation.
 
 ##### UTF-8 Byte Order Mark
-Set `writer_options::utf8_bom`
+Set `writer_options::utf8_bom`.
+
 If set, the output will include a UTF-8 BOM at the beginning. Enable this
 only if you expect the output to be read by a program that uses the BOM to detect 
 encoding, or refuses to accept UTF-8 encoded files without a BOM.
