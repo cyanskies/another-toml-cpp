@@ -1,3 +1,25 @@
+// MIT License
+//
+// Copyright(c) 2022 Steven Pilkington
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this softwareand associated documentation files(the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions :
+//
+// The above copyright noticeand this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 // Deprecated but not marked for removal
 // This is the easiest way for us to convert unicode escape codes
 // We dont use the functionallity that was considered a vulnerability AFAIK
@@ -312,7 +334,7 @@ namespace another_toml
 		{
 			const auto string = remove_underscores(str);
 			auto floating_val = double{};
-			auto rep = writer::float_rep::default;
+			auto rep = float_rep::default;
 			const auto string_end = &string[0] + size(string);
 			const auto ret = std::from_chars(&string[0], string_end, floating_val);
 			if (ret.ptr == string_end)
@@ -321,7 +343,7 @@ namespace another_toml
 				// of a float
 				constexpr auto scientific_e = 6;
 				if (matches[scientific_e].matched)
-					rep = writer::float_rep::scientific;
+					rep = float_rep::scientific;
 				return parse_float_string_return{ floating_val, rep };
 			}
 			else if (ret.ec == std::errc::result_out_of_range)
@@ -556,7 +578,7 @@ namespace another_toml
 				const auto unicode_char = static_cast<char32_t>(int_val);
 				if (result.ptr != &s[code_end] ||
 					result.ec == std::errc::result_out_of_range ||
-					!valid_u32_char(unicode_char))
+					!valid_u32_code_point(unicode_char))
 				{
 					if constexpr (NoThrow)
 					{
@@ -622,12 +644,12 @@ namespace another_toml
 					u8.push_back(*beg);
 
 				const auto ch = unicode_u8_to_u32(u8);
-				if (!valid_u32_char(ch))
+				if (!valid_u32_code_point(ch))
 					return false;
 			}
 			else if (is_unicode_continuation(*beg)) // Misplaced continuation byte
 				return false;
-			else if (!valid_u32_char(static_cast<char32_t>(*beg))) // Ascii
+			else if (!valid_u32_code_point(static_cast<char32_t>(*beg))) // Ascii
 				return false;
 		}
 
@@ -677,7 +699,7 @@ namespace another_toml
 			out |= *beg & 0b00111111;
 		}
 
-		if (valid_u32_char(out))
+		if (valid_u32_code_point(out))
 			return out;
 
 		return unicode_error_char;

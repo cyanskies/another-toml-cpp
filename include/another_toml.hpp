@@ -1,3 +1,25 @@
+// MIT License
+//
+// Copyright(c) 2022 Steven Pilkington
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this softwareand associated documentation files(the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions :
+//
+// The above copyright noticeand this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 #ifndef ANOTHER_TOML_HPP
 #define ANOTHER_TOML_HPP
 
@@ -82,9 +104,12 @@ namespace another_toml
 
 	namespace detail
 	{
+		// Internal value, used to indicate that the index of a node
+		// couldn't be found (or creation of a node failed).
 		using index_t = std::size_t;
 		constexpr auto bad_index = std::numeric_limits<detail::index_t>::max();
 
+		// Trait for iterable ranges (excluding string).
 		template<typename Range, typename = void>
 		constexpr auto is_range_v = false;
 		template<typename Range>
@@ -95,6 +120,7 @@ namespace another_toml
 			>
 		> = !std::is_same_v<Range, std::string>;
 
+		// Trait for appendable containers (excluding string).
 		template<typename Cont, typename = void>
 		constexpr auto is_container_v = false;
 		template<typename Cont>
@@ -105,22 +131,28 @@ namespace another_toml
 			>
 		> = !std::is_same_v<Cont, std::string>;
 
+		// Trait for integral types, exluding bool.
 		template<typename Integral>
 		constexpr auto is_integral_v = std::is_integral_v<Integral> &&
 			!std::is_same_v<Integral, bool>;
 
+		// Internal data storage type
 		struct toml_internal_data;
+		// Deleter above type
 		struct toml_data_deleter
 		{
 		public:
 			void operator()(toml_internal_data*) noexcept;
 		};
 
+		// Returns the sibling node of index_t, or bad_index.
 		index_t get_next(const toml_internal_data&, index_t) noexcept;
 
+		// Tag type
 		struct no_throw_t {};
 	}
 
+	// TOML value types
 	enum class value_type {
 		string,
 		integer,
@@ -130,12 +162,12 @@ namespace another_toml
 		local_date_time,
 		local_date,
 		local_time,
-		unknown, // couldn't detect, can still be read as string
 		// The following values are internal only
 		bad, // detected as invalid
 		out_of_range
 	};
 
+	// TOML node types.
 	enum class node_type
 	{
 		table,
@@ -144,10 +176,10 @@ namespace another_toml
 		key,
 		value,
 		inline_table,
-		comment, // note, we don't provide access to comments or preserve them
 		bad_type
 	};
 
+	// Simple date type.
 	struct date
 	{
 		std::uint16_t year = {};
@@ -155,6 +187,7 @@ namespace another_toml
 			day = {};
 	};
 
+	// Simple time type.
 	struct time
 	{
 		std::int8_t hours = {},
@@ -163,12 +196,14 @@ namespace another_toml
 		float seconds_frac = {};
 	};
 
+	// Compound date/time type
 	struct local_date_time
 	{
 		date date = {};
 		time time = {};
 	};
 
+	// Compound date/time type with offset
 	struct date_time
 	{
 		local_date_time datetime = {};
@@ -190,8 +225,31 @@ namespace another_toml
 			std::is_same_v<T, date_time>;
 	}
 
+	// types for controlling string conversion in basic_node and writer.
+	enum class int_base : std::uint8_t
+	{
+		dec,
+		hex,
+		oct,
+		bin
+	};
+
+	enum class float_rep : std::uint8_t
+	{
+		default,
+		fixed,
+		scientific
+	};
+
+	static constexpr auto auto_precision = std::int8_t{ -1 };
+
+
+	// FWD def
 	class node_iterator;
 
+	// TOML node for accessing parsed data
+	// If RootNode = true then the type holds ownership of the 
+	// internal TOML data.
 	template<bool RootNode = false>
 	class basic_node 
 	{
@@ -200,20 +258,19 @@ namespace another_toml
 			std::unique_ptr<detail::toml_internal_data, detail::toml_data_deleter>,
 			const detail::toml_internal_data*>;
 
+		// Child node constructor
 		explicit basic_node(data_type shared_data = data_type{},
 			detail::index_t i = detail::bad_index)
 			: _data{ std::move(shared_data) }, _index{ i } {}
 
-		//test if this is a valid node: calling any function other than good()
-		//								on an invalid node is undefined behaviour
-		// this will return false for nodes returned by the fucntions:
-		//	get_child() for a node that has no children
-		// if you use iterator/ranges to access child nodes then you don't have to worry about this.
+		// Test if this is a valid node: calling any function other than good()
+		//	 							 on an invalid node is undefined behaviour
+		// If you use iterator/ranges to access child and sibling nodes then you don't have to worry about this.
 		// NOTE: the non-throwing parse functions return values should be checked for this
 		//		before use
 		bool good() const noexcept;
 
-		// test node type
+		// Test node type
 		bool table() const noexcept;
 		bool array() const noexcept;
 		bool array_table() const noexcept;
@@ -225,7 +282,7 @@ namespace another_toml
 		// the type of the stored value
 		value_type type() const noexcept;
 
-		// get the nodes children
+		// Get the nodes children
 		// children are any nodes deeper in the heirarchy than the current node
 		// eg. for a table: subtables, keys, arrays(of subtables)
 		//		for an array: arrays, values, tables
@@ -234,20 +291,27 @@ namespace another_toml
 		bool has_children() const noexcept;
 		std::vector<basic_node<>> get_children() const;
 		basic_node<> get_first_child() const;
+
+		// Get siblings. If this node isn't the only child of its parent
+		// then you can iterate through the siblings by calling get_next_sibling.
 		bool has_sibling() const noexcept;
 		basic_node<> get_next_sibling() const;
 
 		// get child with the provided name
 		// test the return value using .good()
+		// NOTE: Only searches immediate children.
+		//		 Doesn't support dotted keynames.
 		basic_node<> find_child(std::string_view) const;
 
-		// get table or inline table with the provided name
+		// Get table or inline table with the provided name
 		// throws key_not_found if the table doesn't exist
 		// or wrong_type if the name is being used for a non-table node
 		basic_node<> find_table(std::string_view) const;
 
-		// return the value of the provided key name
-		// requires that this node is a table or inline_table
+		// Searches for a child node called key_name,
+		// if that node is a Key, then returns it's child
+		// converted to `T`.
+		// Requires that this node is a table or inline_table
 		// Both versions of this function throw wrong_type if
 		// 'T' is not able to store the value
 		// First version throws key_not_found
@@ -257,17 +321,18 @@ namespace another_toml
 		template<typename T>
 		T get_value(std::string_view key_name, T default_return) const;
 
-		// iterator based interface
+		// Iterator based interface for accessing child nodes
 		node_iterator begin() const noexcept;
 		node_iterator end() const noexcept;
-		// returns the number of child nodes
-		std::size_t size() const noexcept;
 		
-		// extract the value of this node as various types
+		// Extract the value of this node as various types
 		// as_string can extract the names of tables, keys, arrays, array_tables
-		// and convert value nodes to string
+		// and convert value nodes to string representations
 		std::string as_string() const;
-		// the following functions should only be called on nodes
+		std::string as_string(int_base) const;
+		std::string as_string(float_rep, std::int8_t = auto_precision) const;
+
+		// The following functions should only be called on nodes
 		// matching the value_type of the node
 		// this requires value() to return true and type() to return
 		// the type desired.
@@ -279,9 +344,14 @@ namespace another_toml
 		date as_date_local() const;
 		time as_time_local() const;
 
+		// Extracts this node as the requested type.
+		// `T` can be a container if this node is a heterogeneous array
+		// `T` or `T::value_type` must be one of the types returned by 
+		// the extraction functions above (as_XXXXX()).
 		template<typename T>
-		T as_t() const;
+		T as_type() const;
 
+		// Allow implicit testing of the node
 		operator bool() const noexcept
 		{
 			return good();
@@ -292,11 +362,16 @@ namespace another_toml
 		detail::index_t _index;
 	};
 
+	// The two node types are the `root_node`, which is returned by 
+	// another_toml::parse and owns the parsed TOML data and
+	// `node` which is a lightweight view into the root_node. 
 	using root_node = basic_node<true>;
 	using node = basic_node<>;
 	extern template class basic_node<true>;
 	extern template class basic_node<>;
 
+	// Iterator for iterating through node siblings
+	// Returned by node functions.
 	class node_iterator
 	{
 	public:
@@ -357,6 +432,7 @@ namespace another_toml
 
 	constexpr auto no_throw = detail::no_throw_t{};
 
+	// Parse a TOML document .
 	root_node parse(std::string_view toml);
 	root_node parse(const std::string& toml);
 	root_node parse(const char* toml);
@@ -365,7 +441,8 @@ namespace another_toml
 	// eg. std::filesystem_error and its children
 	root_node parse(const std::filesystem::path& filename);
 
-	// if root_node::good() == false, check std::cerr for error messages
+	// Parse a TOML document without throwing of the exceptions
+	// from the top of this file. Errors are reported to std::cerr.
 	root_node parse(std::string_view toml, detail::no_throw_t);
 	root_node parse(const std::string& toml, detail::no_throw_t);
 	root_node parse(const char* toml, detail::no_throw_t);
@@ -431,53 +508,40 @@ namespace another_toml
 		void begin_array_table(std::string_view);
 		void end_array_table() noexcept;
 
-		// write values on their own, for arrays
 		void write_key(std::string_view);
 
-		struct literal_t {};
-		static constexpr auto literal_string_tag = literal_t{};
+		// Write values on their own, for arrays
 
+		// Strings are required to be in utf-8
 		void write_value(std::string&& value);
+
+		struct literal_string_t {};
+		static constexpr auto literal_string_tag = literal_string_t{};
+
 		// pass literal string tag to mark a string as being a literal
-		void write_value(std::string&& value, literal_t);
+		void write_value(std::string&& value, literal_string_t);
 
 		void write_value(std::string_view value);
-		void write_value(std::string_view value, literal_t);
+		void write_value(std::string_view value, literal_string_t);
 
+		// We need these to stop cstrings being converted to bool
 		void write_value(const char* value)
 		{
 			write_value(std::string_view{ value });
 			return;
 		}
 
-		void write_value(const char* value, literal_t l)
+		void write_value(const char* value, literal_string_t l)
 		{
 			write_value(std::string_view{ value }, l);
 			return;
 		}
-
-		enum class int_base : std::uint8_t
-		{
-			dec,
-			hex,
-			oct,
-			bin
-		};
 
 		void write_value(std::int64_t value, int_base = int_base::dec);
 
 		template<typename Integral,
 			std::enable_if_t<detail::is_integral_v<Integral>, int> = 0>
 		void write_value(Integral i, int_base = int_base::dec);
-
-		enum class float_rep : std::uint8_t
-		{
-			default,
-			fixed,
-			scientific
-		};
-
-		static constexpr auto auto_precision = std::int8_t{ -1 };
 
 		void write_value(double value, float_rep = float_rep::default, std::int8_t precision = auto_precision);
 		void write_value(bool value);
@@ -493,12 +557,12 @@ namespace another_toml
 		// Allowing passing string_literal_tag when using the above template method.
 		template<typename String,
 			std::enable_if_t<std::is_convertible_v<String, std::string_view>, int> = 0>
-		void write(std::string_view key, String&& value, literal_t);
+		void write(std::string_view key, String&& value, literal_string_t);
 		// Array write for strings
 		template<typename Container,
 			std::enable_if_t<detail::is_range_v<Container> &&
 			std::is_convertible_v<typename Container::value_type, std::string_view>, int> = 0>
-		void write(std::string_view key, Container&& value, literal_t);
+		void write(std::string_view key, Container&& value, literal_string_t);
 		// Allowing passing an integral base when using the above template method.
 		template<typename Integral, 
 			std::enable_if_t<detail::is_integral_v<Integral>, int> = 0>
@@ -524,7 +588,7 @@ namespace another_toml
 		// initializer_list String options support
 		template<typename String,
 			std::enable_if_t<std::is_convertible_v<String, std::string_view>, int> = 0>
-		void write(std::string_view key, std::initializer_list<String> value, literal_t);
+		void write(std::string_view key, std::initializer_list<String> value, literal_string_t);
 		// initializer_list Integral options support
 		template<typename Integral,
 			std::enable_if_t<detail::is_integral_v<Integral>, int> = 0>
@@ -549,8 +613,6 @@ namespace another_toml
 		writer_options _opts;
 		std::unique_ptr<detail::toml_internal_data, detail::toml_data_deleter> _data;
 	};
-
-	writer make_writer();
 }
 
 namespace std

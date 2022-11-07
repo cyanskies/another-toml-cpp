@@ -1,3 +1,25 @@
+// MIT License
+//
+// Copyright(c) 2022 Steven Pilkington
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this softwareand associated documentation files(the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions :
+//
+// The above copyright noticeand this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 #include "another_toml.hpp"
 
 #include <array>
@@ -29,13 +51,13 @@ namespace another_toml
 		struct integral
 		{
 			std::int64_t value;
-			writer::int_base base;
+			int_base base;
 		};
 
 		struct floating
 		{
 			double value;
-			writer::float_rep rep;
+			float_rep rep;
 			std::int8_t precision = -1;
 		};
 
@@ -61,7 +83,7 @@ namespace another_toml
 		{
 			std::string name;
 			node_type type = node_type::bad_type;
-			value_type v_type = value_type::unknown;
+			value_type v_type = value_type::bad;
 			variant_t value;
 			table_def table_type = table_def::not_table;
 			// a closed table can still have child tables added, but not child keys
@@ -269,19 +291,6 @@ namespace another_toml
 		return node_iterator{};
 	}
 
-	template<bool R>
-	std::size_t basic_node<R>::size() const noexcept
-	{
-		auto size = std::size_t{};
-		auto child = _data->nodes[_index].child;
-		while (child != bad_index)
-		{
-			++size;
-			child = _data->nodes[child].next;
-		}
-		return size;
-	}
-
 	struct to_string_visitor
 	{
 	public:
@@ -289,25 +298,24 @@ namespace another_toml
 
 		std::string operator()(std::monostate)
 		{
-			return "Error";
+			throw wrong_type{ "This node type cannot be converted to string"s };
 		}
 
 		std::string operator()(string_t)
 		{
-			return "Error";
+			throw parser_error{ "Error outputing string value"s };
 		}
 
 		std::string operator()(detail::integral i)
 		{
 			auto out = std::stringstream{};
-			using base = writer::int_base;
-			if (options.simple_numerical_output)
+			using base = int_base;
+			if (options.simple_numerical_output ||
+				i.value < 0)
 				i.base = base::dec;
 
 			if (i.base == base::bin)
 			{
-				// negative values are forbidden
-				assert(i.value >= 0);
 				auto bin = std::bitset<64>{ *reinterpret_cast<uint64_t*>(&i.value) }.to_string();
 				auto beg = begin(bin);
 				auto end = std::end(bin);
@@ -335,11 +343,6 @@ namespace another_toml
 					break;
 				}
 
-				if (i.base != base::dec)
-				{
-					assert(i.value >= 0);
-				}
-
 				out << i.value;
 				return out.str();
 			}
@@ -355,14 +358,14 @@ namespace another_toml
 				return "-inf"s;
 
 			auto strm = std::ostringstream{};
-			if (d.rep == writer::float_rep::scientific &&
+			if (d.rep == float_rep::scientific &&
 				!options.simple_numerical_output)
 				strm << std::scientific;
-			else if (d.rep == writer::float_rep::fixed &&
+			else if (d.rep == float_rep::fixed &&
 				!options.simple_numerical_output)
 				strm << std::fixed;
 
-			if (d.precision > writer::auto_precision)
+			if (d.precision > auto_precision)
 				strm << std::setprecision(d.precision);
 	
 			strm << d.value;
@@ -439,19 +442,47 @@ namespace another_toml
 		}
 	};
 
-
 	template<bool R>
 	std::string basic_node<R>::as_string() const
 	{
-		if(_data->nodes[_index].type == node_type::value &&
-			_data->nodes[_index].v_type != value_type::string)
-		{
-			auto opts = writer_options{};
-			opts.simple_numerical_output = true;
-			return std::visit(to_string_visitor{ opts }, _data->nodes[_index].value);
-		}
+		if(_data->nodes[_index].v_type == value_type::string ||
+			_data->nodes[_index].type != node_type::value)
+			return _data->nodes[_index].name;
 
-		return _data->nodes[_index].name;
+		return std::visit(to_string_visitor{ writer_options{} }, _data->nodes[_index].value);
+	}
+
+	template<bool R>
+	std::string basic_node<R>::as_string(int_base b) const
+	{
+		try
+		{
+			auto value = std::get<integral>(_data->nodes[_index].value);
+			value.base = b;
+
+			return to_string_visitor{ writer_options{} }(value);
+		}
+		catch (const std::bad_variant_access&)
+		{
+			throw wrong_type{ "This overload only works on integral types"s };
+		}
+	}
+
+	template<bool R>
+	std::string basic_node<R>::as_string(float_rep rep, std::int8_t prec) const
+	{
+		try
+		{
+			auto value = std::get<floating>(_data->nodes[_index].value);
+			value.rep = rep;
+			value.precision = prec;
+
+			return to_string_visitor{ writer_options{} }(value);
+		}
+		catch (const std::bad_variant_access&)
+		{
+			throw wrong_type{ "This overload only works on floating point types"s };
+		}
 	}
 
 	template<bool R>
@@ -697,7 +728,7 @@ namespace another_toml
 		return;
 	}
 
-	void writer::write_value(std::string&& value, literal_t)
+	void writer::write_value(std::string&& value, literal_string_t)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::move(value), true });
 		if (_data->nodes[_stack.back()].type == node_type::key)
@@ -713,7 +744,7 @@ namespace another_toml
 		return;
 	}
 
-	void writer::write_value(std::string_view value, literal_t)
+	void writer::write_value(std::string_view value, literal_string_t)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::string{ value }, true });
 		if (_data->nodes[_stack.back()].type == node_type::key)
@@ -1199,7 +1230,7 @@ namespace another_toml
 				if (c_ref.v_type == value_type::string)
 				{
 					const auto& string_extra = std::get<string_t>(c_ref.value);
-					if (!string_extra.literal || 
+					if (!string_extra.literal ||
 						// if we want ascii output, all unicode chars 
 						// must be escaped in doublequoted strings
 						(o.ascii_output && contains_unicode(c_ref.name)))
@@ -1218,9 +1249,8 @@ namespace another_toml
 						append_line_length(last_newline_dist, 2 + size(c_ref.name), o);
 					}
 				}
-				else if (c_ref.v_type == value_type::bad ||
-					c_ref.v_type == value_type::unknown)
-					assert(false);//bad
+				else if (c_ref.v_type == value_type::bad)
+					throw parser_error{ "Value node with bad data, unable to output"s };
 				else
 				{
 					const auto str = std::visit(to_string_visitor{ o }, c_ref.value);
@@ -1454,8 +1484,6 @@ namespace another_toml
 		return ch == '\n';
 	}
 
-	
-
 	//test ch against the list of forbidden chars above
 	constexpr bool comment_forbidden_char(char ch) noexcept
 	{
@@ -1478,6 +1506,7 @@ namespace another_toml
 	} 
 
 	// limit to a-z, A-Z, 0-9, '-' and '_'
+	// NOTE: this changes in TOML 1.1
 	constexpr bool valid_key_name_char(char ch) noexcept
 	{
 		return ch == '-'			||
@@ -1638,7 +1667,7 @@ namespace another_toml
 			out |= ch & 0b00111111;
 		}
 
-		if (valid_u32_char(out))
+		if (valid_u32_code_point(out))
 			return out;
 
 		return unicode_error_char;
@@ -1790,6 +1819,7 @@ namespace another_toml
 		return out;
 	}
 
+	// Defined in another_toml_string_util.cpp
 	template<bool NoThrow>
 	std::optional<std::string> replace_escape_chars(std::string_view);
 
@@ -2063,24 +2093,24 @@ namespace another_toml
 			auto string = remove_underscores(str);
 			
 			auto base = 10;
-			auto base_en = writer::int_base::dec;
+			auto base_en = int_base::dec;
 			if (size(string) > 1)
 			{
 				const auto base_chars = std::string_view{ &*begin(string), 2 };
 				if (base_chars == "0x"sv)
 				{
 					base = 16;
-					base_en = writer::int_base::hex;
+					base_en = int_base::hex;
 				}
 				else if (base_chars == "0b"sv)
 				{
 					base = 2;
-					base_en = writer::int_base::bin;
+					base_en = int_base::bin;
 				}
 				else if (base_chars == "0o"sv)
 				{
 					base = 8;
-					base_en = writer::int_base::oct;
+					base_en = int_base::oct;
 				}
 
 				if (base != 10)
@@ -2720,7 +2750,6 @@ namespace another_toml
 		if (toml_data.nodes[key_str.parent].closed == false)
 			strm.open_tables.emplace_back(key_str.parent);
 
-
 		auto key = detail::internal_node{ std::move(*key_str.name), node_type::key };
 		const auto key_index = insert_child<NoThrow>(toml_data, key_str.parent, std::move(key));
 
@@ -3111,8 +3140,6 @@ namespace another_toml
 
 		if (toml_data->nodes.back().type == node_type::bad_type)
 			return root_node{};
-
-
 
 #ifndef NDEBUG
 		toml_data->input_log = std::move(p_state.toml_file);
