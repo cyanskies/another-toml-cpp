@@ -31,12 +31,14 @@ data = [ ["delta", "phi"], [3.14] ]
 temp_targets = { cpu = 79.5, case = 72.0 }
 
 [servers]
-[servers.alpha]
-ip = "10.0.0.1"
-role = "frontend"
-[servers.beta]
-ip = "10.0.0.2"
-role = "backend"
+
+	[servers.alpha]
+	ip = "10.0.0.1"
+	role = "frontend"
+
+	[servers.beta]
+	ip = "10.0.0.2"
+	role = "backend"
 
 [[products]]
 name = "Hammer"
@@ -601,7 +603,7 @@ If enabled the writer will skip any optional whitespace, can be used
 to reduce document size at the cost of readability(doesn''t effect array line splitting).
 
 ```toml
-compact_spacing_off = [ 1, 2, 3]
+compact_spacing_off = [ 1, 2, 3 ]
 compact_spacing_on=[1,2,3]
 ```
 
