@@ -672,6 +672,15 @@ count = 5
 	[q.w.e] # leaf table
 ```
 
+##### Date Time Separator
+Set `writer_options::date_time_separator`.
+
+Choose which character to use to separate the date and time portions of 
+datetime and local datetime types:
+
+* `writer_options::date_time_separator_t::big_t`
+* `writer_options::date_time_separator_t::whitespace` (default)
+
 ##### Simple Numerical Output
 Set `writer_options::simple_numerical_output`.
 

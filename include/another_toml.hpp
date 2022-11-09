@@ -468,6 +468,16 @@ namespace another_toml
 		// skip writing redundant table headers
 		// eg. for [a.b.c], [a] and [a.b] only need to be written if they have keys in them
 		bool skip_empty_tables = true;
+		// Date Time separator
+		enum class date_time_separator_t : std::uint8_t 
+		{
+			big_t,
+			whitespace
+		};
+
+		// default to big_t;
+		date_time_separator_t date_time_separator = {};
+
 		// ignore per value override specifiers where possible
 		// (eg. all ints output in base 10, floats in normal mode rather than scientific)
 		bool simple_numerical_output = false;

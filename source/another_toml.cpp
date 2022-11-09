@@ -430,7 +430,17 @@ namespace another_toml
 		std::string operator()(local_date_time v)
 		{
 			auto out = this->operator()(v.date);
-			out.push_back('T');
+			using sep = writer_options::date_time_separator_t;
+			switch (options.date_time_separator)
+			{
+			case sep::big_t:
+				out.push_back('T');
+				break;
+			case sep::whitespace:
+				out.push_back(' ');
+				break;
+			}
+
 			out += this->operator()(v.time);
 			return out;
 		}
