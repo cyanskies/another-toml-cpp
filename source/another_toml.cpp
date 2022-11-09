@@ -430,7 +430,6 @@ namespace another_toml
 		std::string operator()(local_date_time v)
 		{
 			auto out = this->operator()(v.date);
-			// TODO: make this configurable
 			out.push_back('T');
 			out += this->operator()(v.time);
 			return out;
@@ -719,7 +718,7 @@ namespace another_toml
 		assert(new_node != bad_index);
 		return new_node;
 	}
-
+	
 	void writer::write_value(std::string&& value)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::move(value), false });
@@ -910,19 +909,19 @@ namespace another_toml
 	
 	void append_line_length(char_count_t& line, std::size_t length, const writer_options& o) noexcept
 	{
-		if (length > o.array_line_length)
-			line = o.array_line_length + 1;
+		if (length > o.max_line_length)
+			line = o.max_line_length + 1;
 		else
 			line += static_cast<char_count_t>(length);
 
-		if (line > o.array_line_length)
-			line = o.array_line_length + 1;
+		if (line > o.max_line_length)
+			line = o.max_line_length + 1;
 		return;
 	}
 
 	bool optional_newline(std::ostream& strm, char_count_t& last_newline, const writer_options& o)
 	{
-		if (last_newline > 0 && last_newline > o.array_line_length)
+		if (last_newline > 0 && last_newline > o.max_line_length)
 		{
 			strm << '\n';
 			last_newline = {};
@@ -945,6 +944,161 @@ namespace another_toml
 				append_line_length(last_newline_dist, str_size, o);
 			}
 		}
+	}
+
+	// Returns true if the string can be output as a literal
+	static bool string_can_be_literal(std::string_view str) noexcept
+	{
+		return std::search_n(begin(str), end(str), 3, '\'') == end(str);
+	}
+
+	enum string_out_type
+	{
+		default,
+		literal,
+		multiline,
+		literal_multiline_one_line,
+		literal_multiline
+	};
+
+	constexpr bool is_unicode_whitespace(char32_t c) noexcept
+	{
+		switch (c)
+		{
+		case '\t':
+			[[fallthrough]];
+		case ' ':
+			[[fallthrough]];
+		//case U'\xA0': // No break space
+		//	[[fallthrough]];
+		case U'\u1680': // OGHAM space mark
+			[[fallthrough]];
+		case U'\u2000': // en quad
+			[[fallthrough]];
+		case U'\u2001': // em quad
+			[[fallthrough]];
+		case U'\u2002': // en space
+			[[fallthrough]];
+		case U'\u2003': // em space
+			[[fallthrough]];
+		case U'\u2004': // 3 em space
+			[[fallthrough]];
+		case U'\u2005': // 4 em space 
+			[[fallthrough]]; 
+		case U'\u2006': // 6 em space
+			[[fallthrough]];
+		case U'\u2008': // punc space
+			[[fallthrough]];
+		case U'\u2009': // thin space
+			[[fallthrough]];
+		case U'\u200A': // hair space
+			[[fallthrough]];
+		case U'\u205F': // medium math space
+			[[fallthrough]];
+		case U'\u3000': // ideographic space
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	static std::string add_multiline_wraps(std::string_view str, const writer_options& o, std::int16_t& last_newline_dist)
+	{
+		auto unicode = unicode8_to_unicode32(str);
+		// need to detect spaces and unicode newline chars
+		for (auto i = std::size_t{}; i < size(unicode); ++i)
+		{
+			if (last_newline_dist > o.max_line_length
+				&& is_unicode_whitespace(unicode[i]))
+			{
+				unicode.insert(++i, U"\\\n"s);
+				++i;
+				last_newline_dist = {};
+				continue;
+			}
+
+			if (unicode[i] == '\n')
+				last_newline_dist = {};
+			else
+				++last_newline_dist;
+		}
+
+		return unicode32_to_unicode8(unicode);
+	}
+
+	static void write_out_string(std::ostream& strm, const string_t& string_extra, std::string_view str,
+		const writer_options& o, char_count_t& last_newline_dist)
+	{
+		auto type = string_out_type::default;
+		if (string_extra.literal)
+			type = string_out_type::literal;
+
+		if (type == string_out_type::literal && std::find(begin(str), end(str), '\'') != end(str))
+		{
+			if ((o.ascii_output && contains_unicode(str))
+				|| !string_can_be_literal(str))
+				type = string_out_type::default;
+			else
+				type = string_out_type::literal_multiline_one_line;
+		}
+
+		if (size(str) > o.max_line_length)
+		{
+			if (type == string_out_type::default)
+				type = string_out_type::multiline;
+			if (type == string_out_type::literal ||
+				type == string_out_type::literal_multiline_one_line)
+				type = string_out_type::literal_multiline;
+		}
+
+		if(type == string_out_type::literal_multiline_one_line &&
+			str.find('\n') != std::string_view::npos)
+			type = type = string_out_type::literal_multiline;
+
+		switch (type)
+		{
+		case string_out_type::default:
+		{
+			strm.put('\"');
+			++last_newline_dist;
+			const auto esc_str = o.ascii_output ? to_escaped_string2(str) : to_escaped_string(str);
+			strm.write(data(esc_str), size(esc_str));
+			strm << '\"';
+			append_line_length(last_newline_dist, 2 + size(esc_str), o);
+		}break;
+		case string_out_type::literal:
+		{
+			strm.put('\'');
+			++last_newline_dist;
+		}break;
+		case string_out_type::multiline:
+		{
+			strm << "\"\"\"\n"s;
+			last_newline_dist = {};
+			auto esc_str = o.ascii_output ? to_escaped_multiline2(str) : to_escaped_multiline(str);
+			esc_str = add_multiline_wraps(esc_str, o, last_newline_dist);
+			auto newline = esc_str.find_last_of('\n');
+			if (newline == std::string::npos)
+				newline = {};
+			strm << esc_str << "\"\"\""s;
+			last_newline_dist = size(esc_str) - newline + 3;
+		}break;
+		case string_out_type::literal_multiline:
+		{
+			auto newline = str.find_last_of('\n');
+			if (newline == std::string_view::npos)
+				newline = {};
+			strm << "\'\'\'\n"s << str << "\'\'\'"s;
+			last_newline_dist = size(str) - newline + 3;
+		}break;
+		case string_out_type::literal_multiline_one_line:
+		{
+			strm << "\'\'\'"s << str << "\'\'\'"s;
+			append_line_length(last_newline_dist, size(str) + 6, o);
+		}break;
+		}
+
+		return;
 	}
 
 	template<bool WriteOne>
@@ -1230,24 +1384,7 @@ namespace another_toml
 				if (c_ref.v_type == value_type::string)
 				{
 					const auto& string_extra = std::get<string_t>(c_ref.value);
-					if (!string_extra.literal ||
-						// if we want ascii output, all unicode chars 
-						// must be escaped in doublequoted strings
-						(o.ascii_output && contains_unicode(c_ref.name)))
-					{
-						strm << '\"';
-						const auto str = o.ascii_output ? to_escaped_string2(c_ref.name) : to_escaped_string(c_ref.name);
-						strm.write(data(str), size(str));
-						strm << '\"';
-						append_line_length(last_newline_dist, 2 + size(str), o);
-					}
-					else
-					{
-						strm << '\'';
-						strm.write(data(c_ref.name), size(c_ref.name));
-						strm << '\'';
-						append_line_length(last_newline_dist, 2 + size(c_ref.name), o);
-					}
+					write_out_string(strm, string_extra, c_ref.name, o, last_newline_dist);
 				}
 				else if (c_ref.v_type == value_type::bad)
 					throw parser_error{ "Value node with bad data, unable to output"s };
@@ -1481,7 +1618,19 @@ namespace another_toml
 			return true;
 		}
 
-		return ch == '\n';
+		switch (ch)
+		{
+		case '\n':
+			[[fallthrough]];
+		case '\f':
+			[[fallthrough]];
+		case '\v':
+			return true;
+		default:
+			return false;
+		}
+
+		//return ch == '\n';
 	}
 
 	//test ch against the list of forbidden chars above

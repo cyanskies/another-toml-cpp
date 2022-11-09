@@ -453,8 +453,9 @@ namespace another_toml
 	struct writer_options
 	{
 		// how many characters before splitting next array element to new line
-		// set to 0 to never split
-		std::int16_t array_line_length = 80;
+		// set to dont_split_lines to never split
+		std::int16_t max_line_length = 80;
+		static constexpr auto dont_split_lines = std::numeric_limits<std::int16_t>::max();
 		// if true, avoids unrequired whitespace eg: name = value -> name=value
 		bool compact_spacing = false;
 		// add an indentation level for each child table

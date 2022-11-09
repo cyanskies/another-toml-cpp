@@ -69,6 +69,13 @@ namespace another_toml
 	// throws unicode_error on bad escape codes
 	std::string to_unescaped_string(std::string_view str);
 
+	// Convert strings to multiline TOML strings
+	std::string to_literal_multiline(std::string_view str);
+	// Escapes all characters except newline and unicode
+	std::string to_escaped_multiline(std::string_view str);
+	// Escapes all characters except newline
+	std::string to_escaped_multiline2(std::string_view str);
+
 	// Escapes and adds quotations around str so that it can be used
 	// as a valid toml name(keys, tables).
 	// Set ascii_output to return an ASCII string; unicode chars will be escaped.
@@ -85,6 +92,13 @@ namespace another_toml
 	char32_t unicode_u8_to_u32(std::string_view str) noexcept;
 	// Converts ch to a utf-8 encoded string representing char
 	std::string unicode_u32_to_u8(char32_t ch);
+
+	// Convert UTF-32 string to UTF-8
+	// Throws unicode_error
+	std::string unicode32_to_unicode8(std::u32string_view str);
+	// Convert UTF-8 string to UTF-32
+	// Throws unicode_error
+	std::u32string unicode8_to_unicode32(std::string_view str);
 
 	// Tests if the char is a unicode code unit
 	constexpr bool is_unicode_byte(char) noexcept;

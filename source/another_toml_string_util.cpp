@@ -358,7 +358,7 @@ namespace another_toml
 		const auto unicode_bad_conversion = "conversion_error"s;
 	}
 
-	template<bool NoThrow, bool EscapeAllUnicode>
+	template<bool NoThrow, bool EscapeAllUnicode, bool EscapeNewline>
 	static std::optional<std::string> to_escaped_string(std::string_view unicode)
 	{
 		auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ {}, unicode32_bad_conversion };
@@ -450,12 +450,12 @@ namespace another_toml
 
 	std::string to_escaped_string(std::string_view str)
 	{
-		return *to_escaped_string<false, false>(str);
+		return *to_escaped_string<false, false, true>(str);
 	}
 
 	std::string to_escaped_string2(std::string_view str)
 	{
-		return *to_escaped_string<false, true>(str);
+		return *to_escaped_string<false, true, true>(str);
 	}
 
 	std::string escape_toml_name(std::string_view s, bool ascii)
@@ -627,6 +627,21 @@ namespace another_toml
 		return *replace_escape_chars<false>(str);
 	}
 
+	std::string to_literal_multiline(std::string_view str)
+	{
+		return *to_escaped_string<false, false, false>(str);
+	}
+
+	std::string to_escaped_multiline(std::string_view str)
+	{
+		return *to_escaped_string<false, false, false>(str);
+	}
+
+	std::string to_escaped_multiline2(std::string_view str)
+	{
+		return *to_escaped_string<false, true, false>(str);
+	}
+
 	bool contains_unicode(std::string_view s) noexcept
 	{
 		return std::any_of(begin(s), end(s), is_unicode_byte);
@@ -729,5 +744,23 @@ namespace another_toml
 	std::string unicode_u32_to_u8(char32_t ch)
 	{
 		return *to_u8_str<false>(ch);
+	}
+
+	std::string unicode32_to_unicode8(std::u32string_view unicode)
+	{
+		auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ {}, unicode32_bad_conversion };
+		const auto u8 = cvt.to_bytes(data(unicode), data(unicode) + size(unicode));
+		if (u8 == unicode_bad_conversion)
+			throw unicode_error{ "Failed to convert string to UTF-8"s };
+		return u8;
+	}
+
+	std::u32string unicode8_to_unicode32(std::string_view unicode)
+	{
+		auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ {}, unicode32_bad_conversion };
+		const auto u32 = cvt.from_bytes(data(unicode), data(unicode) + size(unicode));
+		if (u32 == unicode32_bad_conversion)
+			throw unicode_error{ "Failed to convert string to UTF-32"s };
+		return u32;
 	}
 }

@@ -585,10 +585,17 @@ More settings for controlling writer output can be controlled by passing a `writ
 struct to your writer. `writer_options` is default contructed with the settings that
 writer uses by default. A description of each setting is below:
 
-##### Array Line Length
-Set `writer_options::array_line_length`.
+##### Max Line Length
+Set `writer_options::max_line_length`.
 
-How many characters an output line should have before splitting.
+How many characters an output line should have before splitting. The lines are only
+split at valid split points, such as after the first '[' of an array or after each
+array elements ','. Lines can also be split for long strings, using '\' to preserve
+the strings value.
+
+Set to `writer_options::dont_split_lines` to not split lines.
+NOTE: Length calculations are simple approximations, not a guarrantee to split the 
+line at a specific column.
 
 ```toml
 line_length_short = [
