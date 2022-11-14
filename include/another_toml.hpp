@@ -153,7 +153,8 @@ namespace another_toml
 	}
 
 	// TOML value types
-	enum class value_type {
+	enum class value_type : std::uint8_t
+	{
 		string,
 		integer,
 		floating_point,
@@ -168,15 +169,22 @@ namespace another_toml
 	};
 
 	// TOML node types.
-	enum class node_type
+	enum class node_type : std::uint8_t
 	{
-		table,
 		array, 
 		array_tables,
 		key,
-		value,
 		inline_table,
-		bad_type
+		value,
+		table,
+		end
+	};
+
+	enum class table_def_type : std::uint8_t
+	{
+		dotted, 
+		header,
+		end
 	};
 
 	// Simple date type.
@@ -242,7 +250,6 @@ namespace another_toml
 	};
 
 	static constexpr auto auto_precision = std::int8_t{ -1 };
-
 
 	// FWD def
 	class node_iterator;
@@ -432,13 +439,13 @@ namespace another_toml
 
 	constexpr auto no_throw = detail::no_throw_t{};
 
-	// Parse a TOML document .
+	// Parse a TOML document.
 	root_node parse(std::string_view toml);
 	root_node parse(const std::string& toml);
 	root_node parse(const char* toml);
 	root_node parse(std::istream&);
 	// NOTE: user must handle std exceptions related to file reading
-	// eg. std::filesystem_error and its children
+	// eg. std::filesystem_error and its children.
 	root_node parse(const std::filesystem::path& filename);
 
 	// Parse a TOML document without throwing of the exceptions
@@ -452,36 +459,36 @@ namespace another_toml
 	//global writer options
 	struct writer_options
 	{
-		// how many characters before splitting next array element to new line
-		// set to dont_split_lines to never split
+		// How many characters before splitting next array element to new line.
+		// Set to dont_split_lines to never split.
 		std::int16_t max_line_length = 80;
 		static constexpr auto dont_split_lines = std::numeric_limits<std::int16_t>::max();
-		// if true, avoids unrequired whitespace eg: name = value -> name=value
+		// If true, avoids unrequired whitespace eg: name = value -> name=value.
 		bool compact_spacing = false;
-		// add an indentation level for each child table
+		// Add an indentation level for each child table.
 		bool indent_child_tables = true;
-		// added to the start of an indented line(may be repeated multiple times)
-		// only has an effect if indent_child_tables = true
+		// Added to the start of an indented line (may be repeated multiple times)
+		// only has an effect if indent_child_tables = true.
 		std::string indent_string = { '\t' };
-		// output only ascii characters(unicode sequences are escaped)
+		// Output only ascii characters (unicode sequences are escaped).
 		bool ascii_output = false;
-		// skip writing redundant table headers
-		// eg. for [a.b.c], [a] and [a.b] only need to be written if they have keys in them
+		// Skip writing redundant table headers.
+		// eg. for [a.b.c], [a] and [a.b] only need to be written if they have keys in them.
 		bool skip_empty_tables = true;
-		// Date Time separator
+		// Date Time separator.
 		enum class date_time_separator_t : std::uint8_t 
 		{
 			big_t,
 			whitespace
 		};
 
-		// default to big_t;
+		// Default to big_t.
 		date_time_separator_t date_time_separator = {};
 
-		// ignore per value override specifiers where possible
+		// Ignore per value override specifiers where possible.
 		// (eg. all ints output in base 10, floats in normal mode rather than scientific)
 		bool simple_numerical_output = false;
-		// write a utf-8 BOM into the start of the stream
+		// Write a utf-8 BOM into the start of the stream.
 		bool utf8_bom = false;
 	};
 
@@ -497,7 +504,7 @@ namespace another_toml
 
 		// [tables]
 		// use end table to control nesting
-		void begin_table(std::string_view);
+		void begin_table(std::string_view, table_def_type = table_def_type::header);
 		void end_table() noexcept;
 
 		// arrays:

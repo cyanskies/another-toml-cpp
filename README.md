@@ -409,6 +409,32 @@ w.begin_table("database");
 w.write("enabled", true);
 ```
 
+#### Writing Dotted Keys
+In TOML a key can have a 'dotted' name:
+
+```toml
+name = "Orange"
+physical.color = "orange"
+physical.shape = "round"
+site."google.com" = true
+```
+
+These structures are expressed in Another TOML by creating dotted tables.
+The above document is created using the following code:
+
+```cpp
+w.write("name", "Orange");
+
+w.begin_table("physical", toml::table_def_type::dotted);
+	w.write("color", "orange");
+	w.write("shape", "round");
+w.end_table();
+
+w.begin_table("site", toml::table_def_type::dotted);
+	w.write("google.com", true);
+w.end_table();
+```
+
 #### Writing Arrays
 We can write arrays by starting and ending the array with
 `begin_array(std::string_view)` and `end_array()`.
