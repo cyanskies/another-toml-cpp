@@ -18,13 +18,20 @@ cmake_policy(SET CMP0076 NEW)
 
 target_sources(${PROJECT_NAME}
 	PUBLIC
-	./include/another_toml.hpp
-	./include/another_toml.inl
-	./include/another_toml_string_util.hpp
-	./include/another_toml_string_util.inl
+	./include/another_toml/another_toml.hpp
+	./include/another_toml/except.hpp
+	./include/another_toml/internal.hpp
+	./include/another_toml/node.hpp
+	./include/another_toml/node.inl
+	./include/another_toml/parser.hpp
+	./include/another_toml/string_util.hpp
+	./include/another_toml/string_util.inl
+	./include/another_toml/types.hpp
+	./include/another_toml/writer.hpp
+	./include/another_toml/writer.inl
 	PRIVATE
 	./source/another_toml.cpp
-	./source/another_toml_string_util.cpp
+	./source/string_util.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC ./include)

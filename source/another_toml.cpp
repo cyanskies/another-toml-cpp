@@ -9,7 +9,7 @@
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions :
 //
-// The above copyright noticeand this permission notice shall be included in all
+// The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
 //
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
@@ -19,8 +19,6 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
-
-#include "another_toml.hpp"
 
 #include <array>
 #include <bitset>
@@ -34,7 +32,13 @@
 #include <variant>
 #include <vector>
 
-#include "another_toml_string_util.hpp"
+#include "another_toml/except.hpp"
+#include "another_toml/internal.hpp"
+#include "another_toml/node.hpp"
+#include "another_toml/parser.hpp"
+#include "another_toml/writer.hpp"
+
+#include "another_toml/string_util.hpp"
 
 using namespace std::string_literals;
 using namespace std::string_view_literals;
@@ -3497,27 +3501,27 @@ namespace another_toml
 		return parse<false>(path);
 	}
 
-	root_node parse(std::string_view toml, detail::no_throw_t)
+	root_node parse(std::string_view toml, no_throw_t)
 	{
 		return parse<true>(toml);
 	}
 
-	root_node parse(const std::string& toml, detail::no_throw_t)
+	root_node parse(const std::string& toml, no_throw_t)
 	{
 		return parse<true>(std::string_view{ toml });
 	}
 
-	root_node parse(const char* toml, detail::no_throw_t)
+	root_node parse(const char* toml, no_throw_t)
 	{
 		return parse<true>(std::string_view{ toml });
 	}
 
-	root_node parse(std::istream& strm, detail::no_throw_t)
+	root_node parse(std::istream& strm, no_throw_t)
 	{
 		return parse<true>(strm);
 	}
 
-	root_node parse(const std::filesystem::path& filename, detail::no_throw_t)
+	root_node parse(const std::filesystem::path& filename, no_throw_t)
 	{
 		return parse<true>(filename);
 	}

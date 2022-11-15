@@ -9,7 +9,7 @@
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions :
 //
-// The above copyright noticeand this permission notice shall be included in all
+// The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
 //
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
@@ -25,7 +25,7 @@
 // We dont use the functionallity that was considered a vulnerability AFAIK
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 
-#include "another_toml_string_util.hpp"
+#include "another_toml/string_util.hpp"
 
 #include <algorithm>
 #include <array>
@@ -36,7 +36,9 @@
 #include <optional>
 #include <regex>
 
-#include "another_toml.hpp"
+#include "another_toml/another_toml.hpp"
+
+#include "another_toml/except.hpp"
 
 using namespace std::string_literals;
 using namespace std::string_view_literals;

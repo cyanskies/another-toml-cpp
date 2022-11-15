@@ -9,7 +9,7 @@
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions :
 //
-// The above copyright noticeand this permission notice shall be included in all
+// The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
 //
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
@@ -28,7 +28,7 @@
 #include <string_view>
 #include <variant>
 
-#include "another_toml.hpp"
+#include "another_toml/another_toml.hpp"
 
 // These functions assume chars, strings and string_views are encoded in utf-8
 
@@ -111,6 +111,6 @@ namespace another_toml
 	constexpr bool valid_u32_code_point(char32_t val) noexcept;
 }
 
-#include "another_toml_string_util.inl"
+#include "another_toml/string_util.inl"
 
 #endif // !ANOTHER_TOML_STRING_UTIL_HPP
