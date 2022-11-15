@@ -20,7 +20,6 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-
 #include "another_toml.hpp"
 
 namespace another_toml
@@ -31,10 +30,9 @@ namespace another_toml
 	{
 		const auto key = find_child(key_name);
 		if (!key.good())
-			throw key_not_found{ "Unable to find key" };
+			throw node_not_found{ "Unable to find key" };
 		
-		const auto val_node = key.get_first_child();
-		return val_node.as_t<T>();
+		return key.as_t<T>();
 	}
 
 	template<bool R>
@@ -45,7 +43,7 @@ namespace another_toml
 		{
 			return get_value<T>(key_name);
 		}
-		catch (const parser_error&)
+		catch (const node_not_found&)
 		{
 			return def;
 		}

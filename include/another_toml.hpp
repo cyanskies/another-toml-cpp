@@ -36,65 +36,72 @@
 namespace another_toml
 {
 	//thown by any of the parse functions
-	class parser_error :public std::runtime_error
+	class toml_error : public std::runtime_error
 	{
 	public:
 		using std::runtime_error::runtime_error;
 	};
 
-	// thrown from unicode handling functions(in string_util.hpp)
-	// also thrown while parsing or writing unicode text
-	class unicode_error : public parser_error
-	{
-	public:
-		using parser_error::parser_error;
-	};
-
 	//thrown if eof is encountered in an unexpected location(inside a quote or table name, etc.)
-	class unexpected_eof : public parser_error
+	class unexpected_eof : public toml_error
 	{
 	public:
-		using parser_error::parser_error;
+		using toml_error::toml_error;
 	};
 
 	//thrown when encountering an unexpected character
-	class unexpected_character :public parser_error
+	class unexpected_character :public toml_error
 	{
 	public:
-		using parser_error::parser_error;
+		using toml_error::toml_error;
 	};
 
 	//thrown if the toml file contains duplicate table or key declarations
-	class duplicate_element :public parser_error
+	class duplicate_element : public toml_error
 	{
 	public:
-		using parser_error::parser_error;
+		using toml_error::toml_error;
+	};
+
+	// Thrown by basic_node when calling fucntions on a node where good() == false
+	class bad_node : public toml_error
+	{
+	public:
+		using toml_error::toml_error;
 	};
 
 	//thrown when calling node::as_int... if the type
 	// stored doesn't match the function return type
-	class wrong_type : public parser_error
+	class wrong_type : public toml_error
 	{
 	public:
-		using parser_error::parser_error;
+		using toml_error::toml_error;
 	};
 
 	// thrown if calling a function that isn't 
 	// supported by the current node type
-	class wrong_node_type : public parser_error
+	class wrong_node_type : public toml_error
 	{
 	public:
-		using parser_error::parser_error;
+		using toml_error::toml_error;
 	};
 
 	// thrown by some functions that search for keys,
 	// but do not have another way to report failure
-	class key_not_found : public parser_error
+	class node_not_found : public toml_error
 	{
 	public:
-		using parser_error::parser_error;
+		using toml_error::toml_error;
 	};
 
+	// thrown from unicode handling functions(in string_util.hpp)
+	// also thrown while parsing or writing unicode text
+	class unicode_error : public toml_error
+	{
+	public:
+		using toml_error::toml_error;
+	};
+	
 	// thrown if an invalid raw unicode or escaped unicode char was found
 	class invalid_unicode_char : public unicode_error
 	{
@@ -253,6 +260,7 @@ namespace another_toml
 
 	// FWD def
 	class node_iterator;
+	constexpr auto no_throw = detail::no_throw_t{};
 
 	// TOML node for accessing parsed data
 	// If RootNode = true then the type holds ownership of the 
@@ -270,8 +278,7 @@ namespace another_toml
 			detail::index_t i = detail::bad_index)
 			: _data{ std::move(shared_data) }, _index{ i } {}
 
-		// Test if this is a valid node: calling any function other than good()
-		//	 							 on an invalid node is undefined behaviour
+		// Test if this is a valid node.
 		// If you use iterator/ranges to access child and sibling nodes then you don't have to worry about this.
 		// NOTE: the non-throwing parse functions return values should be checked for this
 		//		before use
@@ -296,24 +303,29 @@ namespace another_toml
 		//		for a value: none
 		//		for a key: anonymous table, value, array(of arrays of values)
 		bool has_children() const noexcept;
+		// Throws: bad_node if good() == false for this node
 		std::vector<basic_node<>> get_children() const;
+		// Throws: bad_node if good() == false for this node
+		// If this node has no chilren, then the returned node will be bad
 		basic_node<> get_first_child() const;
 
 		// Get siblings. If this node isn't the only child of its parent
 		// then you can iterate through the siblings by calling get_next_sibling.
 		bool has_sibling() const noexcept;
+
+		// Throws: bad_node if good() == false for this node
+		// Throws: node_not_found if has_children() == false
 		basic_node<> get_next_sibling() const;
 
 		// get child with the provided name
 		// test the return value using .good()
 		// NOTE: Only searches immediate children.
 		//		 Doesn't support dotted keynames.
+		// Throws : bad_node and node_not_found
 		basic_node<> find_child(std::string_view) const;
 
-		// Get table or inline table with the provided name
-		// throws key_not_found if the table doesn't exist
-		// or wrong_type if the name is being used for a non-table node
-		basic_node<> find_table(std::string_view) const;
+		// As above, but returns a bad node on error instead of throwing
+		basic_node<> find_child(std::string_view, detail::no_throw_t) const noexcept;
 
 		// Searches for a child node called key_name,
 		// if that node is a Key, then returns it's child
@@ -321,10 +333,10 @@ namespace another_toml
 		// Requires that this node is a table or inline_table
 		// Both versions of this function throw wrong_type if
 		// 'T' is not able to store the value
-		// First version throws key_not_found
+		// Throws: node_not_found
 		template<typename T>
 		T get_value(std::string_view key_name) const;
-		// Provide a default value to be returned if the key isnt found
+		// Provide a default value to be returned if the key isn't found
 		template<typename T>
 		T get_value(std::string_view key_name, T default_return) const;
 
@@ -357,6 +369,18 @@ namespace another_toml
 		// the extraction functions above (as_XXXXX()).
 		template<typename T>
 		T as_type() const;
+
+		// Shorthand for find_child
+		basic_node<> operator[](std::string_view str) const
+		{
+			return find_child(str);
+		}
+
+		// Disambiguate from the built-in ptr dereference operator
+		basic_node<> operator[](const char* str) const
+		{
+			return find_child(str);
+		}
 
 		// Allow implicit testing of the node
 		operator bool() const noexcept
@@ -436,8 +460,6 @@ namespace another_toml
 		const detail::toml_internal_data* _data;
 		detail::index_t _index;
 	};
-
-	constexpr auto no_throw = detail::no_throw_t{};
 
 	// Parse a TOML document.
 	root_node parse(std::string_view toml);

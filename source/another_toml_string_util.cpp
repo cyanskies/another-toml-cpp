@@ -371,7 +371,7 @@ namespace another_toml
 				return {};
 			}
 			else
-				throw parser_error{ "Invalid utf-8 string"s };
+				throw toml_error{ "Invalid utf-8 string"s };
 		}
 
 		auto out = std::string{};
@@ -733,7 +733,7 @@ namespace another_toml
 				return {};
 			}
 			else
-				throw parser_error{ "Invalid utf-8 chars"s };
+				throw toml_error{ "Invalid utf-8 chars"s };
 		}
 		return u8;
 	}

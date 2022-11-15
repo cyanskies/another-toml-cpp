@@ -137,54 +137,59 @@ namespace another_toml
 	template<bool R>
 	bool basic_node<R>::table() const noexcept
 	{
-		return node_type::table == _data->nodes[_index].type;
+		return good() && node_type::table == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::array() const noexcept
 	{
-		return node_type::array == _data->nodes[_index].type;
+		return good() && node_type::array == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::array_table() const noexcept
 	{
-		return node_type::array_tables == _data->nodes[_index].type;
+		return good() && node_type::array_tables == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::key() const noexcept
 	{
-		return node_type::key == _data->nodes[_index].type;
+		return good() && node_type::key == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::value() const noexcept
 	{
-		return node_type::value == _data->nodes[_index].type;
+		return good() && node_type::value == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::inline_table() const noexcept
 	{
-		return node_type::inline_table == _data->nodes[_index].type;
+		return good() && node_type::inline_table == _data->nodes[_index].type;
 	}
 
 	template<bool R>
 	value_type basic_node<R>::type() const noexcept
 	{
+		if (!good())
+			return value_type::bad;
 		return _data->nodes[_index].v_type;
 	}
 
 	template<bool R>
 	bool basic_node<R>::has_children() const noexcept
 	{
-		return _data->nodes[_index].child != bad_index;
+		return good() && _data->nodes[_index].child != bad_index;
 	}
 
 	template<bool R>
 	std::vector<basic_node<>> basic_node<R>::get_children() const
 	{
+		if (!good())
+			throw bad_node{ "Called get_children on a bad node"s };
+
 		auto out = std::vector<basic_node<>>{};
 		auto child = _data->nodes[_index].child;
 		while (child != bad_index)
@@ -202,36 +207,51 @@ namespace another_toml
 	template<>
 	basic_node<> basic_node<true>::get_first_child() const
 	{
+		if (!good())
+			throw bad_node{ "Called get_first_child on a bad node"s };
+
 		return basic_node<>{ _data.get(), _data->nodes[_index].child};
 	}
 
 	template<>
 	basic_node<> basic_node<>::get_first_child() const
 	{
+		if (!good())
+			throw bad_node{ "Called get_first_child on a bad node"s };
+
 		return basic_node<>{ _data, _data->nodes[_index].child};
 	}
 
 	template<bool R>
 	bool basic_node<R>::has_sibling() const noexcept
 	{
-		return _data->nodes[_index].next != bad_index;
+		return good() && _data->nodes[_index].next != bad_index;
 	}
 
 	template<>
 	basic_node<> basic_node<true>::get_next_sibling() const
 	{
+		if (!good())
+			throw bad_node{ "Called get_next_sibling on a bad node"s };
+
 		return basic_node<>{ _data.get(), _data->nodes[_index].next};
 	}
 
 	template<>
 	basic_node<> basic_node<>::get_next_sibling() const
 	{
+		if (!good())
+			throw bad_node{ "Called get_next_sibling on a bad node"s };
+
 		return basic_node<>{ _data, _data->nodes[_index].next};
 	}
 
 	template<bool R>
 	basic_node<> basic_node<R>::find_child(std::string_view name) const
 	{
+		if (!good())
+			throw bad_node{ "Called find_child on a bad node"s };
+
 		if (!table() && !inline_table())
 			throw wrong_node_type{ "Cannot call find_child on this type of node"s };
 
@@ -239,27 +259,29 @@ namespace another_toml
 		while (child.good() && child.as_string() != name)
 			child = child.get_next_sibling();
 
+		if (!child.good())
+			throw node_not_found{ "Failed to find child node"s };
+
+		if (child.key())
+			return child.get_first_child();
+
 		return child;
 	}
 
 	template<bool R>
-	basic_node<> basic_node<R>::find_table(std::string_view name) const
+	basic_node<> basic_node<R>::find_child(std::string_view name, no_throw_t) const noexcept
 	{
-		const auto table = find_child(name);
-		if (!table.good())
-			throw key_not_found{ "No table found with that name"s };
+		if (!table() && !inline_table())
+			return basic_node<>{};
 
-		//const auto table = table_key.get_first_child();
-		if (table.table() || table.inline_table())
-			return table;
-		else if (table.key())
-		{
-			const auto t_value = table.get_first_child();
-			if (t_value.table() || t_value.inline_table())
-				return t_value;
-		}
+		auto child = get_first_child();
+		while (child.good() && child.as_string() != name)
+			child = child.get_next_sibling();
 
-		throw wrong_type{ "Name doesnt reference a table"s };
+		if (child.key())
+			return child.get_first_child();
+
+		return child;
 	}
 
 	template<bool R>
@@ -295,7 +317,7 @@ namespace another_toml
 
 		std::string operator()(string_t)
 		{
-			throw parser_error{ "Error outputing string value"s };
+			throw toml_error{ "Error outputing string value"s };
 		}
 
 		std::string operator()(detail::integral i)
@@ -446,6 +468,9 @@ namespace another_toml
 	template<bool R>
 	std::string basic_node<R>::as_string() const
 	{
+		if (!good())
+			throw bad_node{ "Called as_string on a bad node"s };
+
 		if(_data->nodes[_index].v_type == value_type::string ||
 			_data->nodes[_index].type != node_type::value)
 			return _data->nodes[_index].name;
@@ -456,6 +481,9 @@ namespace another_toml
 	template<bool R>
 	std::string basic_node<R>::as_string(int_base b) const
 	{
+		if (!good())
+			throw bad_node{ "Called as_string on a bad node"s };
+
 		try
 		{
 			auto value = std::get<integral>(_data->nodes[_index].value);
@@ -472,6 +500,9 @@ namespace another_toml
 	template<bool R>
 	std::string basic_node<R>::as_string(float_rep rep, std::int8_t prec) const
 	{
+		if (!good())
+			throw bad_node{ "Called as_string on a bad node"s };
+
 		try
 		{
 			auto value = std::get<floating>(_data->nodes[_index].value);
@@ -489,6 +520,9 @@ namespace another_toml
 	template<bool R>
 	std::int64_t basic_node<R>::as_integer() const
 	{
+		if (!good())
+			throw bad_node{ "Called as_integer on a bad node"s };
+
 		try
 		{
 			const auto integral = std::get<detail::integral>(_data->nodes[_index].value);
@@ -503,6 +537,9 @@ namespace another_toml
 	template<bool R>
 	double basic_node<R>::as_floating() const
 	{
+		if (!good())
+			throw bad_node{ "Called as_floating on a bad node"s };
+
 		try
 		{
 			return std::get<floating>(_data->nodes[_index].value).value;
@@ -516,6 +553,9 @@ namespace another_toml
 	template<bool R>
 	bool basic_node<R>::as_boolean() const
 	{
+		if (!good())
+			throw bad_node{ "Called as_boolean on a bad node"s };
+
 		try
 		{
 			return std::get<bool>(_data->nodes[_index].value);
@@ -529,6 +569,9 @@ namespace another_toml
 	template<bool R>
 	date_time basic_node<R>::as_date_time() const
 	{
+		if (!good())
+			throw bad_node{ "Called as_date_time on a bad node"s };
+
 		try
 		{
 			return std::get<date_time>(_data->nodes[_index].value);
@@ -542,6 +585,9 @@ namespace another_toml
 	template<bool R>
 	local_date_time basic_node<R>::as_date_time_local() const
 	{
+		if (!good())
+			throw bad_node{ "Called as_date_time_local on a bad node"s };
+
 		try 
 		{
 			return std::get<local_date_time>(_data->nodes[_index].value);
@@ -555,6 +601,9 @@ namespace another_toml
 	template<bool R>
 	date basic_node<R>::as_date_local() const
 	{
+		if (!good())
+			throw bad_node{ "Called as_date_local on a bad node"s };
+
 		try
 		{
 			return std::get<date>(_data->nodes[_index].value);
@@ -568,6 +617,9 @@ namespace another_toml
 	template<bool R>
 	time basic_node<R>::as_time_local() const
 	{
+		if (!good())
+			throw bad_node{ "Called as_time_local on a bad node"s };
+
 		try
 		{
 			return std::get<time>(_data->nodes[_index].value);
@@ -1122,7 +1174,7 @@ namespace another_toml
 			if (newline == std::string::npos)
 				newline = {};
 			strm << esc_str << "\"\"\""s;
-			last_newline_dist = size(esc_str) - newline + 3;
+			append_line_length(last_newline_dist, size(esc_str) - newline + 3, o);
 		}break;
 		case string_out_type::literal_multiline:
 		{
@@ -1130,7 +1182,7 @@ namespace another_toml
 			if (newline == std::string_view::npos)
 				newline = {};
 			strm << "\'\'\'\n"s << str << "\'\'\'"s;
-			last_newline_dist = size(str) - newline + 3;
+			append_line_length(last_newline_dist, size(str) - newline + 3, o);
 		}break;
 		case string_out_type::literal_multiline_one_line:
 		{
@@ -1476,7 +1528,7 @@ namespace another_toml
 					write_out_string(strm, string_extra, c_ref.name, o, last_newline_dist);
 				}
 				else if (c_ref.v_type == value_type::bad)
-					throw parser_error{ "Value node with bad data, unable to output"s };
+					throw toml_error{ "Value node with bad data, unable to output"s };
 				else
 				{
 					const auto str = std::visit(to_string_visitor{ o }, c_ref.value);
@@ -1808,7 +1860,7 @@ namespace another_toml
 							return bad_index;
 						}
 						else
-							throw parser_error{ "Tried to create table array with already used name: "s + name };
+							throw toml_error{ "Tried to create table array with already used name: "s + name };
 					}
 				}
 
@@ -1997,7 +2049,7 @@ namespace another_toml
 						return {};
 					}
 					else
-						throw parser_error{ "Invalid unicode character in string"s };
+						throw toml_error{ "Invalid unicode character in string"s };
 				}
 				else
 				{
@@ -2097,7 +2149,7 @@ namespace another_toml
 						return {};
 					}
 					else
-						throw parser_error{ "Illigal name"s };
+						throw toml_error{ "Illigal name"s };
 				}
 
 				strm.putback(ch);
@@ -2198,7 +2250,7 @@ namespace another_toml
 						return {};
 					}
 					else
-						throw parser_error{ "Missing name" };
+						throw toml_error{ "Missing name" };
 				}
 				else
 				{
@@ -2218,7 +2270,7 @@ namespace another_toml
 								return {};
 							}
 							else
-								throw parser_error{ "Name heirarchy for keys shouldn't include table arrays"s };
+								throw toml_error{ "Name heirarchy for keys shouldn't include table arrays"s };
 						}
 
 						child = c.child;
@@ -2241,7 +2293,7 @@ namespace another_toml
 								return {};
 							}
 							else
-								throw parser_error{ "Using dotted keys to add to a previously defined table is not allowed"s };
+								throw toml_error{ "Using dotted keys to add to a previously defined table is not allowed"s };
 						}
 						// fall out of if
 					}
@@ -2254,7 +2306,7 @@ namespace another_toml
 							return {};
 						}
 						else
-							throw parser_error{ "Using dotted names to treat a non-table as a table"s };
+							throw toml_error{ "Using dotted names to treat a non-table as a table"s };
 					}
 
 					parent = child;
@@ -2277,7 +2329,7 @@ namespace another_toml
 						return {};
 					}
 					else
-						throw parser_error{ "Error reading name"s };
+						throw toml_error{ "Error reading name"s };
 				}
 			}
 			else
@@ -2289,7 +2341,7 @@ namespace another_toml
 					return {};
 				}
 				else
-					throw parser_error{ "Unexpected character in name"s };
+					throw toml_error{ "Unexpected character in name"s };
 			}
 		}
 
@@ -2465,9 +2517,9 @@ namespace another_toml
 					else
 					{
 						if constexpr(array)
-							throw parser_error{ "Unexpected newline in array element"s };
+							throw toml_error{ "Unexpected newline in array element"s };
 						else
-							throw parser_error{ "Unexpected newline in inline table value"s };
+							throw toml_error{ "Unexpected newline in inline table value"s };
 					}
 				}
 			}
@@ -2491,7 +2543,7 @@ namespace another_toml
 				return false;
 			}
 			else
-				throw parser_error{ "Expected value"s };
+				throw toml_error{ "Expected value"s };
 		}
 
 		auto [type, value, string] = get_value_type<NoThrow>(out);
@@ -2503,7 +2555,7 @@ namespace another_toml
 				return false;
 			}
 			else
-				throw parser_error{ "Error parsing value"s };
+				throw toml_error{ "Error parsing value"s };
 		}
 
 		if (type == value_type::out_of_range)
@@ -2514,7 +2566,7 @@ namespace another_toml
 				return false;
 			}
 			else
-				throw parser_error{ "Parsed value was out of range"s };
+				throw toml_error{ "Parsed value was out of range"s };
 		}
 
 		strm.token_stream.push_back(token_type::value);
@@ -2665,7 +2717,7 @@ namespace another_toml
 			return {};
 		}
 		else
-			throw parser_error{ "Error parsing multiline string"s };
+			throw toml_error{ "Error parsing multiline string"s };
 	}
 
 	template<bool NoThrow, bool DoubleQuote>
@@ -2854,7 +2906,7 @@ namespace another_toml
 			return false;
 		}
 		else 
-			throw parser_error{ "Stream error while parsing array"s };
+			throw toml_error{ "Stream error while parsing array"s };
 	}
 
 	template<bool NoThrow>
@@ -3167,7 +3219,7 @@ namespace another_toml
 					return bad_index;
 				}
 				else
-					throw parser_error{ "table redefinition" };
+					throw toml_error{ "table redefinition" };
 			}
 		}
 
@@ -3180,7 +3232,7 @@ namespace another_toml
 				return bad_index;
 			}
 			else
-				throw parser_error{ "Error getting table name" };
+				throw toml_error{ "Error getting table name" };
 		}
 
 		auto& parent = name.parent;
