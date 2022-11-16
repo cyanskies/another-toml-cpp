@@ -271,7 +271,7 @@ You can pass `toml::no_throw` to instead return a bad node on failure.
 ```cpp
 auto database = root_node.find_child("database", toml::no_throw);
 auto success = database.good();
-``
+```
 	
 #### Templated Extraction Functions
 You can also convert nodes to values using the templated helper function `as_t<Type>()`.
