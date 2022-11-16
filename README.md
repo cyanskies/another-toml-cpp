@@ -53,7 +53,7 @@ color = "gray"
 ```
 
 Another TOML is designed to read ASCII and UTF-8 encoded files, it will ignore the UTF-8 BOM if encountered
-but will not protect against being given files in an unexpected encoding(at least not until they are interpreted as invalid TOML).
+but will not protect against being given files in an unexpected encoding (at least not until they are interpreted as invalid TOML).
 
 ### Parsing Example
 The following code can be used to read the above toml file and extract each of the values stored in it.
@@ -84,14 +84,15 @@ auto root_table = toml::parse(std::cin);
 auto root_table = toml::parse(path);
 ```
 
-Parser functions will throw `another_toml::parser_error`
+Parser functions will throw `another_toml::toml_error`
 You can also catch the more specific exception sub-types defined in another_toml.hpp
 
 You can pass `another_toml::no_throw` to request the parser not to throw exceptions.
 The parser may still throw standard library exceptions related to memory alloc or 
 stream/filesystem access(for the overloads that use these).
 
-Use `good()` to test if the returned node can be read from.
+Use `good()` to test if the returned node can be read from. If a node returns `false` after calling `good()`
+then it is known as a bad node.
 
 ```cpp
 auto root_table = toml::parse(toml_str, toml::no_throw);
@@ -167,7 +168,8 @@ if(second_child.table())
 	auto table_name = second_child.as_string();
 ```
 
-Some nodes don't have names, such as arrays or inline tables that are nested within arrays.
+Some nodes don't have names, such as arrays or inline tables that are nested within arrays, these nodes
+will return an empty string. 
 
 Once you have a value node you can convert it into a usable c++ type.
 TOML types correspond to the following c++ types:
@@ -239,21 +241,43 @@ auto dob_str = dob_value.as_string();
 ```
 
 #### Finding Child Nodes
-Access nodes as above if useful for reading TOML documents with unknown data in them;
+Accessing nodes as above if useful for reading TOML documents with unknown data in them;
 but most of the time we are expecting a specific structure for our document.
 We can use `find_child(std::string_view)` to find a specific node by name.
 
 ```cpp
 auto database = root_node.find_child("database");
-auto success = database.good();
 ```
+
+`find_child` will skip key nodes, the code below will return the inline table node,
+rather than the key node named `temp_targets`. This makes it easier to write code that
+accesses inline tables, values and arrays.
+
+```cpp
+auto inline_table = database.find_child("temp_targets");
+```
+
+`operator[]` is overriden for nodes so that the following code can be written:
+
+```cpp
+auto case_temp_value = root_node["database"]["temp_targets"]["case"];
+```
+
+`find_child(std::string_view)` throws `node_not_found` if the child node cannot be found,
+this is so that calls to `find_child` report error while they are chained together as above.
+
+You can pass `toml::no_throw` to instead return a bad node on failure.
+
+```cpp
+auto database = root_node.find_child("database", toml::no_throw);
+auto success = database.good();
+``
 	
 #### Templated Extraction Functions
 You can also convert nodes to values using the templated helper function `as_t<Type>()`.
 
 ```cpp
-auto enabled_key = database.find_child("enabled");
-auto enabled_value = enabled_key.get_first_child();
+auto enabled_value = database.find_child("enabled");
 auto is_enabled = enabled_value.as_t<bool>();
 ```
 
@@ -270,8 +294,7 @@ cannot be converted into the desired type.
 We can iterate over a nodes children to extract arrays.
 
 ```cpp
-auto ports_key = database.find_child("ports");
-auto ports_array = port_key.get_first_child();
+auto ports_array = database.find_child("ports");
 auto ports = std::vector<std::int64_t>{};
 for (auto elm : port_array)
 	ports.push_back(elm.as_integer());
@@ -286,34 +309,29 @@ auto ports = database.get_value<std::vector<std::int64_t>>("ports");
 We can also extract all the child nodes as a `std::vector` using `get_children()`.
 
 ```cpp
-auto data_key = database.find_child("data");
-auto data_array = data_key.get_first_child();
+auto data_array = database.find_child("data");
 auto elements = data_array.get_children();
 auto data_strings = elements[0].as_t<std::vector<std::string>>();
 auto data_floats = elements[1].as_t<std::vector<double>>();
 ```
 
 #### Extracting Tables
-We can also extract inline tables using the helper function `find_table(std::string_view)`.
+We can also extract inline tables using `find_child`.
 
 ```cpp
-auto temp_targets = database.find_table("temp_targets");
+auto temp_targets = database.find_child("temp_targets");
 auto temp_cpu = temp_targets.get_value<double>("cpu");
 auto temp_case = temp_targets.get_value<double>("case");
 ```
 
-`find_table` can throw `another_toml::key_not_found` or `another_toml::wrong_type`.
-
-`find_table` works with normal tables too!
+Code for reading data from a table will typically look like this:
 
 ```cpp
-auto servers = root_table.find_table("servers");
-
-auto alpha = servers.find_table("alpha");
+auto alpha = root_table["servers"]["alpha"];
 auto alpha_ip = alpha.get_value<std::string>("ip");
 auto alpha_role = alpha.get_value<std::string>("role");
 
-auto beta = servers.find_table("beta");
+auto beta = root_table["servers"]["beta"];
 auto beta_ip = alpha.get_value<std::string>("ip");
 auto beta_role = alpha.get_value<std::string>("role");
 ```
@@ -338,14 +356,11 @@ for (auto table_elm : products_array)
 {
 	auto new_poduct = product{};
 	auto name = table_elm.find_child("name");
-	if(name.good())
-		new_product.name = name.get_first_child().as_string();
+	new_product.name = name.as_string();
 	auto sku = table_elm.find_child("sku");
-	if(sku.good())
-		new_product.sky = sku.get_first_child().as_integer();
+	new_product.sky = sku.as_integer();
 	auto color = table_elm.find_child("color");
-	if(color.good())
-		new_product.color = sku.get_first_child().as_string();
+	new_product.color = color.as_string();
 	product_vect.emplace_back(new_product);			
 }
 ```
