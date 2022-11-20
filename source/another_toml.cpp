@@ -110,24 +110,28 @@ namespace another_toml
 
 	using namespace detail;
 
-	constexpr auto root_table = index_t{};
-
-	index_t find_table(const std::string_view n, const index_t p, const detail::toml_internal_data& d) noexcept
+	static std::string to_string(node_type n)
 	{
-		assert(p != bad_index);
-		
-		const auto &parent = d.nodes[p];
-		auto table = parent.child;
-		while (table != bad_index)
+		switch (n)
 		{
-			auto& t = d.nodes[table];
-			if (t.name == n)
-				return table;
-			table = t.next;
+		case node_type::array:
+			return "array"s;
+		case node_type::array_tables:
+			return "array table"s;
+		case node_type::inline_table:
+			return "inline table"s;
+		case node_type::key:
+			return "key"s;
+		case node_type::value:
+			return "value"s;
+		case node_type::table:
+			return "table"s;
 		}
 
-		return bad_index;
+		return "error type"s;
 	}
+
+	constexpr auto root_table = index_t{};
 
 	// method defs for nodes
 	template<bool R>
@@ -1625,7 +1629,7 @@ namespace another_toml
 					if constexpr (NoThrow)
 						return bad_index;
 					else
-						throw duplicate_element{ "Tried to insert duplicate element: "s + n.name + ", into: " + p.name };
+						throw duplicate_element{ "Tried to insert duplicate element: "s + n.name + ", into: " + p.name, {}, {}, n.name };
 				}
 
 				if (child_ref.next == bad_index)
@@ -1692,13 +1696,10 @@ namespace another_toml
 				if constexpr (NoThrow)
 					return { {}, true };
 				else
-					throw unexpected_eof{ "Parser encountered an unexcpected eof."};
+					throw unexpected_eof{ "Parser encountered an unexcpected eof."s };
 			}
 
-			#ifndef NDEBUG
 			toml_file.push_back(static_cast<char>(val));
-			#endif
-
 			++col;
 			return { static_cast<char>(val), {} };
 		}
@@ -1707,16 +1708,23 @@ namespace another_toml
 		{
 			col = {};
 			++line;
+			toml_file.clear();
 			return;
 		}
 
 		void ignore()
 		{
-			#ifndef NDEBUG
 			toml_file.push_back(strm.peek());
-			#endif
-
 			strm.ignore();
+			++col;
+			return;
+		}
+
+		void putback() noexcept
+		{
+			--col;
+			strm.putback(toml_file.back());
+			toml_file.pop_back();
 			return;
 		}
 
@@ -1724,10 +1732,7 @@ namespace another_toml
 		{
 			--col;
 			strm.putback(ch);
-
-			#ifndef NDEBUG
 			toml_file.pop_back();
-			#endif
 			return;
 		}
 
@@ -1749,9 +1754,8 @@ namespace another_toml
 		std::vector<token_type> token_stream;
 		std::size_t line = {};
 		std::size_t col = {};
-		#ifndef NDEBUG
+		// Stores the previously parsed line.
 		std::string toml_file;
-		#endif
 	};
 
 	//new line(we check both, since file may have been opened in binary mode)
@@ -1838,6 +1842,49 @@ namespace another_toml
 		return insert_child<NoThrow>(d, parent, std::move(table));
 	}
 
+	static void print_error_string(parser_state& strm, std::size_t error_begin, std::size_t error_end,
+		std::ostream& cerr)
+	{
+		auto line_display_strm = std::ostringstream{};
+		line_display_strm << strm.line + 1 << '>';
+		const auto line_display = line_display_strm.str();
+
+		if (strm.toml_file.back() != '\n')
+		{
+			auto [ch, eof] = strm.get_char<true>();
+			while (!eof && ch != '\n')
+				std::tie(ch, eof) = strm.get_char<true>();
+		}
+
+		cerr << line_display << strm.toml_file;
+		if(strm.toml_file.back() != '\n')
+			cerr << '\n';
+
+		error_begin += size(line_display);
+
+		if (error_end == std::numeric_limits<std::size_t>::max())
+			error_end = size(line_display) + size(strm.toml_file) - 1;
+		else
+			error_end += size(line_display);
+		
+		for (auto i = char_count_t{}; i < error_end; ++i)
+		{
+			if (i == error_end - 1)
+			cerr.put('^');
+			else if (i < error_begin )
+				cerr.put(' ');
+			else if (i == error_begin)
+				cerr.put('^');
+			
+			else if (i >= error_end)
+				break;
+			else
+				cerr.put('~');
+		}
+
+		return;
+	}
+
 	template<bool NoThrow>
 	static index_t insert_child_table_array(index_t parent, std::string name, detail::toml_internal_data& d)
 	{
@@ -1858,13 +1905,16 @@ namespace another_toml
 					}
 					else
 					{
+						const auto msg = "Attempted to redefine \""s + name +
+							"\" as an array table; was previously defined as: "s + to_string(node->type) + "\n"s;
 						if constexpr (NoThrow)
 						{
-							std::cerr << "Tried to create table array with already used name: " << name << '\n';
+							std::cerr << msg;
+							insert_bad(d);
 							return bad_index;
 						}
 						else
-							throw toml_error{ "Tried to create table array with already used name: "s + name };
+							throw duplicate_element{ msg, {}, {}, std::move(name) };
 					}
 				}
 
@@ -1977,14 +2027,31 @@ namespace another_toml
 	{
 		constexpr auto delim = DoubleQuoted ? '\"' : '\'';
 		auto out = std::string{};
+		char ch;
+		bool eof;
+		const auto string_begin = strm.col - 1;
+		constexpr auto missing_end_error_msg = "Quoted string missing end quote\n"sv;
+
 		while (strm.strm.good())
 		{
-			const auto [ch, eof] = strm.get_char<NoThrow>();
+			try
+			{
+				std::tie(ch, eof) = strm.get_char<NoThrow>();
+			}
+			catch (const unexpected_eof&)
+			{
+				auto string = std::ostringstream{};
+				string << missing_end_error_msg;
+				print_error_string(strm, string_begin, strm.col, string);
+				throw unexpected_eof{ string.str(), strm.line, strm.col };
+			}
+
 			if constexpr (NoThrow)
 			{
 				if (eof)
 				{
-					std::cerr << "Unexpected end of file in quoted string\n"s;
+					std::cerr << missing_end_error_msg;
+					print_error_string(strm, string_begin, strm.col, std::cerr);
 					return {};
 				}
 			}
@@ -1993,11 +2060,17 @@ namespace another_toml
 			{
 				if constexpr (NoThrow)
 				{
-					std::cerr << "Illigal newline in quoted string\n"s;
+					std::cerr << missing_end_error_msg;
+					print_error_string(strm, string_begin, strm.col, std::cerr);
 					return {};
 				}
 				else
-					throw unexpected_character{ "Illigal newline in quoted string"s };
+				{
+					auto string = std::ostringstream{};
+					string << missing_end_error_msg;
+					print_error_string(strm, string_begin, strm.col, string);
+					throw unexpected_character{ string.str(), strm.line, strm.col };
+				}
 			}
 
 			if (ch == delim)
@@ -2006,7 +2079,7 @@ namespace another_toml
 				{
 					if (size(out) > 0)
 					{
-						//don't break on excaped quote: '\"'
+						//don't break on escaped quote: '\"'
 						if (out.back() != '\\')
 						{
 							strm.putback(ch);
@@ -2082,7 +2155,11 @@ namespace another_toml
 	static std::optional<std::string> get_unquoted_name(parser_state& strm, char ch)
 	{
 		if (!valid_key_name_char(ch))
+		{
+			strm.putback(ch);
 			return {};
+		}
+			
 		auto out = std::string{ ch };
 		auto eof = false;
 		while (strm.strm.good())
@@ -2102,7 +2179,6 @@ namespace another_toml
 
 			if (!valid_key_name_char(ch))
 			{
-				std::cerr << "Illigal character found in table/key name: " << ch << '\n';
 				strm.putback(ch);
 				return {};
 			}
@@ -2121,7 +2197,7 @@ namespace another_toml
 	extern template std::optional<std::string> replace_escape_chars<false>(std::string_view);
 
 	template<bool NoThrow, bool Table = false>
-	static key_name parse_key_name(parser_state& strm, detail::toml_internal_data& d)
+	static key_name parse_key_name(parser_state& strm, detail::toml_internal_data& d, std::size_t& key_char_begin)
 	{
 		auto name = std::optional<std::string>{};
 		auto parent = root_table;
@@ -2133,11 +2209,17 @@ namespace another_toml
 
 		while (strm.strm.good())
 		{
+			// eof exception is given more context in the calling function.
 			auto [ch, eof] = strm.get_char<NoThrow>();
 			if constexpr (NoThrow)
 			{
 				if (eof)
+				{
+					std::cerr << "Unexpected end-of-file in table/key name.\n";
+					print_error_string(strm, strm.col, strm.col, std::cerr);
+					insert_bad(d);
 					return {};
+				}
 			}
 
 			if (whitespace(ch, strm))
@@ -2147,13 +2229,22 @@ namespace another_toml
 			{
 				if (!name)
 				{
+					constexpr auto msg = "Missing name\n"sv;
+					const auto name_begin = strm.col < 2 ? 0 : strm.col - 2;
 					if constexpr (NoThrow)
 					{
-						std::cerr << "Illigal name\n"s;
+						std::cerr << msg;
+						insert_bad(d);
+						print_error_string(strm, name_begin, strm.col, std::cerr);
 						return {};
 					}
 					else
-						throw toml_error{ "Illigal name"s };
+					{
+						auto string = std::ostringstream{};
+						string << msg;
+						print_error_string(strm, name_begin, strm.col, string);
+						throw unexpected_character{ string.str(), strm.line, strm.col };
+					}
 				}
 
 				strm.putback(ch);
@@ -2166,11 +2257,11 @@ namespace another_toml
 				{
 					if constexpr (NoThrow)
 					{
-						std::cerr << "Illigal character in name: \"\n";
+						std::cerr << "Unexpected character in name: \"\n";
 						return {};
 					}
 					else
-						throw unexpected_character{ "Illigal character in name: \"" };
+						throw unexpected_character{ "Unexpected character in name: \"" };
 				}
 				name = get_quoted_str<NoThrow, true>(strm);
 				if constexpr (NoThrow)
@@ -2247,14 +2338,22 @@ namespace another_toml
 			{
 				if (!name)
 				{
+					constexpr auto msg = "Missing name\n"sv;
+					const auto name_begin = strm.col < 2 ? 0 : strm.col - 2;
 					if constexpr (NoThrow)
 					{
-						std::cerr << "Missing name\n";
 						insert_bad(d);
+						std::cerr << msg;
+						print_error_string(strm, name_begin, strm.col, std::cerr);
 						return {};
 					}
 					else
-						throw toml_error{ "Missing name" };
+					{
+						auto string = std::ostringstream{};
+						string << msg;
+						print_error_string(strm, name_begin, strm.col, string);
+						throw unexpected_character{ string.str(), strm.line, strm.col };
+					}
 				}
 				else
 				{
@@ -2290,34 +2389,100 @@ namespace another_toml
 					{
 						if constexpr(!Table)
 						{
+							const auto write_error = [&strm, &c](std::ostream& o) {
+								const auto msg = "Attempted to add to a previously defined table: \"" + c.name +
+									"\" using dotted keys.\n"s;
+								const auto name_end = strm.col - 1;
+								const auto name_beg = name_end - size(c.name);
+								o << msg;
+								print_error_string(strm, name_beg, name_end, o);
+								return;
+							};
+
 							if constexpr (NoThrow)
 							{
-								std::cerr << "Using dotted keys to add to a previously defined table is not allowed\n"s;
+								write_error(std::cerr);
 								insert_bad(d);
 								return {};
 							}
 							else
-								throw toml_error{ "Using dotted keys to add to a previously defined table is not allowed"s };
+							{
+								auto string = std::ostringstream{};
+								write_error(string);
+								throw duplicate_element{ string.str(), strm.line, strm.col, c.name };
+							}
 						}
 						// fall out of if
 					}
 					else if (!(c.type == node_type::table || c.type == node_type::array_tables))
 					{
+						const auto write_error = [&strm, &c](std::ostream& o) {
+							const auto msg = "Attempted to redefine \""s + c.name +
+								"\" as a table using dotted keys. Was previously defined as: \""s +
+								to_string(c.type) + "\".\n"s;
+							const auto name_end = strm.col - 1;
+							const auto name_beg = name_end - size(c.name);
+							o << msg;
+							print_error_string(strm, name_beg, name_end, o);
+							return;
+						};
+
 						if constexpr (NoThrow)
 						{
-							std::cerr << "Using dotted names to treat a non-table as a table\n"s;
+							write_error(std::cerr);
 							insert_bad(d);
 							return {};
 						}
 						else
-							throw toml_error{ "Using dotted names to treat a non-table as a table"s };
+						{
+							auto string = std::ostringstream{};
+							write_error(string);
+							throw duplicate_element{ string.str(), strm.line, strm.col, c.name };
+						}
 					}
 
 					parent = child;
 					name = {};
+					key_char_begin = strm.col;
 					continue;
 				}
 			}
+
+			const auto handle_character_error = [&strm, &d, ch] {
+				// eof exception is given more context in the calling function.
+				const auto [ch, eof] = strm.get_char<NoThrow>();
+				if constexpr (NoThrow)
+				{
+					if (eof)
+					{
+						std::cerr << "Unexpected end-of-file in table/key name.\n";
+						print_error_string(strm, strm.col, strm.col, std::cerr);
+						insert_bad(d);
+						return;
+					}
+				}
+
+				const auto print_error = [&strm, ch](std::ostream& str) {
+					str << "Unexpected character found in table/key name: \'"s << ch <<
+						"\'.\n"s;
+					print_error_string(strm, strm.col, strm.col, str);
+				};
+
+				if constexpr (NoThrow)
+				{
+					print_error(std::cerr);
+					insert_bad(d);
+					return;
+				}
+				else
+				{
+					const auto line = strm.line,
+						col = strm.col;
+					auto str = std::ostringstream{};
+					print_error(str);
+					throw unexpected_character{ str.str(), line, col };
+				}
+			};
 
 			if (!name)
 			{
@@ -2326,26 +2491,16 @@ namespace another_toml
 					name = str;
 				else
 				{
-					if constexpr (NoThrow)
-					{
-						std::cerr << "Error reading name\n"s;
-						insert_bad(d);
-						return {};
-					}
-					else
-						throw toml_error{ "Error reading name"s };
+					handle_character_error();
+					return {};
 				}
 			}
 			else
 			{
-				if constexpr (NoThrow)
-				{
-					std::cerr << "Unexpected character in name\n"s;
-					insert_bad(d);
-					return {};
-				}
-				else
-					throw toml_error{ "Unexpected character in name"s };
+				strm.putback();
+				strm.putback();
+				handle_character_error();
+				return {};
 			}
 		}
 
@@ -3017,16 +3172,26 @@ namespace another_toml
 	static bool parse_key_value(parser_state& strm, toml_internal_data& toml_data)
 	{
 		static_assert(std::is_same_v<Tag, normal_tag_t> || std::is_same_v<Tag, inline_tag_t>);
-		auto key_str = parse_key_name<NoThrow>(strm, toml_data);
+		auto key_name_begin = strm.col;
+		auto key_str = key_name{};
+
+		try 
+		{
+			key_str = parse_key_name<NoThrow>(strm, toml_data, key_name_begin);
+		}
+		catch (const unexpected_eof& err)
+		{
+			auto str = std::ostringstream{};
+			str << "Unexpected end-of-file in table/key name.\n";
+			print_error_string(strm, strm.col, strm.col, str);
+
+			throw unexpected_eof{ str.str(), err.line(), err.column() };
+		}
 
 		if constexpr (NoThrow)
 		{
 			if (!key_str.name)
-			{
-				insert_bad(toml_data);
-				std::cerr << "Error getting key name\n"s;
 				return false;
-			}
 		}
 
 		auto [ch, eof] = strm.get_char<NoThrow>();
@@ -3147,6 +3312,12 @@ namespace another_toml
 		return ret;
 	}
 
+	static std::string chtos(char c)
+	{
+		// 0x20 == control chars;
+		return  c < 0x20 ? "\ufffd"s : std::string{ c }; 
+	}
+
 	template<bool NoThrow, bool Array>
 	static index_t parse_table_header(parser_state& strm, toml_internal_data& toml_data)
 	{
@@ -3155,7 +3326,22 @@ namespace another_toml
 		strm.stack.pop_back();
 		strm.close_tables(toml_data);
 
-		const auto name = parse_key_name<NoThrow, true>(strm, toml_data);
+		auto key_name_begin = strm.col;
+		auto name = key_name{};
+
+		try
+		{
+			name = parse_key_name<NoThrow, true>(strm, toml_data, key_name_begin);
+		}
+		catch (const unexpected_eof& err)
+		{
+			auto str = std::ostringstream{};
+			str << "Unexpected end-of-file in table name.\n";
+			print_error_string(strm, strm.col, strm.col, str);
+
+			throw unexpected_eof{ str.str(), err.line(), err.column() };
+		}
+
 		if constexpr (NoThrow)
 		{
 			if (!name.name)
@@ -3181,13 +3367,22 @@ namespace another_toml
 
 		if (ch != ']')
 		{
+			const auto msg = "Unexpected character following table name: \'"s + ch +
+				"\'; was expecting \']\'\n"s;
 			if constexpr (NoThrow)
 			{
-				std::cerr << "Unexpected character, was expecting ']'; found: " << ch << '\n';
+				std::cerr << msg;
+				print_error_string(strm, strm.col, strm.col, std::cerr);
+				insert_bad(toml_data);
 				return bad_index;
 			}
 			else
-				throw unexpected_character{ "Unexpected character, was expecting ']'" };
+			{
+				auto string = std::ostringstream{};
+				string << msg;
+				print_error_string(strm, strm.col, strm.col, string);
+				throw unexpected_character{ string.str(), strm.line, strm.col };
+			}
 		}
 
 		if constexpr (Array)
@@ -3201,29 +3396,27 @@ namespace another_toml
 
 			if (ch != ']')
 			{
-				if constexpr (NoThrow)
-				{
-					insert_bad(toml_data);
-					std::cerr << "Unexpected character while parsing array table name; expected: ']'\n"s;
-					return bad_index;
-				}
-				else
-					throw unexpected_character{ "Unexpected character while parsing array table name; expected: ']'"s };
-			}
-		}
+				const auto write_error = [&strm, ch](std::ostream& o) {
+					o << "Unexpected character while parsing array table header : \'"s;
+					o << chtos(ch);
+					o << "\', was expecting ']'.\n";
+					print_error_string(strm, strm.col, strm.col, o);
+					return;
+				};
 
-		if (const auto table = find_table(*name.name, name.parent, toml_data);
-			table != bad_index && toml_data.nodes[table].closed == true)
-		{
-			if constexpr (!Array)
-			{
 				if constexpr (NoThrow)
 				{
-					std::cerr << "This table: " << *name.name << "; has already been defined\n";
+					write_error(std::cerr);
+					insert_bad(toml_data);
 					return bad_index;
 				}
 				else
-					throw toml_error{ "table redefinition" };
+				{
+					auto str = std::ostringstream{};
+					const auto line = strm.line, col = strm.col;
+					write_error(str);
+					throw unexpected_character{ str.str(), line, col };
+				}
 			}
 		}
 
@@ -3241,23 +3434,70 @@ namespace another_toml
 
 		auto& parent = name.parent;
 		auto table = bad_index;
-		if constexpr (Array)
+		try
 		{
-			table = insert_child_table_array<NoThrow>(name.parent, std::move(*name.name), toml_data);
-			strm.token_stream.emplace_back(token_type::array_table);
+			if constexpr (Array)
+			{
+				table = insert_child_table_array<NoThrow>(name.parent, std::move(*name.name), toml_data);
+				strm.token_stream.emplace_back(token_type::array_table);
+			}
+			else
+			{
+				table = find_child(toml_data, name.parent, *name.name);
+				if (table == bad_index)
+					table = insert_child_table<NoThrow>(name.parent, std::move(*name.name), toml_data, table_def_type::header);
+				const auto type = toml_data.nodes[table].type;
+				if (type != node_type::table)
+				{
+					const auto msg = "Attempted to redefine \""s + *name.name +
+						"\" as a table; was previously defined as: "s + to_string(type) + "\n"s;
+					// type redifinition
+					if constexpr (NoThrow)
+					{
+						std::cerr << msg;
+						print_error_string(strm, key_name_begin, strm.col - 1, std::cerr);
+						return bad_index;
+					}
+					else
+						throw duplicate_element{ msg, {}, {}, *name.name };
+				}
+				else if (toml_data.nodes[table].closed)
+				{
+					const auto msg = "Attepted to reopen table: \""s + toml_data.nodes[table].name +
+						"\", but this table has already been defined.\n"s;
+
+					if constexpr (NoThrow)
+					{
+						std::cerr << msg;
+						print_error_string(strm, key_name_begin, strm.col - 1, std::cerr);
+						insert_bad(toml_data);
+						return bad_index;
+					}
+					else
+						throw duplicate_element{ msg, {}, {}, *name.name };
+				}
+
+				strm.token_stream.emplace_back(token_type::table);
+			}
 		}
-		else
+		catch (duplicate_element& err)
 		{
-			table = find_table(*name.name, name.parent, toml_data);
-			if (table == bad_index)
-				table = insert_child_table<NoThrow>(name.parent, std::move(*name.name), toml_data, table_def_type::header);
-			strm.token_stream.emplace_back(token_type::table);
+			// add missing line/column information to exception
+			auto str = std::ostringstream{};
+			const auto line = strm.line, col = strm.col;
+			constexpr auto end_offset = Array ? 2 : 1;
+			print_error_string(strm, key_name_begin, strm.col - end_offset, str);
+			throw duplicate_element{ err.what() + str.str(), line, col, err.name() };
 		}
 
 		if constexpr (NoThrow)
 		{
 			if (table == bad_index)
+			{
+				constexpr auto end_offset = Array ? 2 : 1;
+				print_error_string(strm, key_name_begin, strm.col - end_offset, std::cerr);
 				return bad_index;
+			}			
 		}
 
 		strm.stack.emplace_back(table);
@@ -3290,13 +3530,26 @@ namespace another_toml
 		}
 		else if (!newline(strm, ch))
 		{
+			auto str = std::ostringstream{};
+			str << "Unexpected character after table header.\n"s;
+			const auto line = strm.line, col = strm.col;
+			
+			// Subtract 2 from the current coloumn position to get back to 
+			// the first char after the header close ']' in the event of
+			//	[table] error
+			// only take 1 in the case of
+			//	[table]error
+			const auto error_begin = *strm.toml_file.rbegin() == ' ' ? strm.col - 2 : strm.col - 1;
+			print_error_string(strm, error_begin, std::numeric_limits<std::size_t>::max(), str);
+
 			if constexpr (NoThrow)
 			{
-				std::cerr << "Unexpected character after table header\n"s;
+				std::cerr << str.str();
+				insert_bad(toml_data);
 				return bad_index;
 			}
 			else
-				throw unexpected_character{ "Unexpected character after table header"s };
+				throw unexpected_character{ str.str(), line, col };
 		}
 		else
 			strm.nextline();
@@ -3363,6 +3616,7 @@ namespace another_toml
 				}
 				else
 				{
+					// Errors handled in parse_table_header
 					auto table = parse_table_header<NoThrow, false>(p_state, *toml_data);
 					if constexpr (NoThrow)
 					{

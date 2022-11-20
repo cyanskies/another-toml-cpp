@@ -32,6 +32,17 @@ namespace another_toml
 	{
 	public:
 		using std::runtime_error::runtime_error;
+
+		// runtime_error msg only takes const& string
+		toml_error(const std::string& msg, std::size_t line, std::size_t col)
+			: runtime_error{ msg }, _line{ line }, _col{ col }
+		{}
+
+		std::size_t line() const { return _line; }
+		std::size_t column() const { return _col; }
+
+	private:
+		std::size_t _line = {}, _col = {};
 	};
 
 	//thrown if eof is encountered in an unexpected location(inside a quote or table name, etc.)
@@ -52,7 +63,15 @@ namespace another_toml
 	class duplicate_element : public toml_error
 	{
 	public:
-		using toml_error::toml_error;
+		duplicate_element(const std::string& msg, std::size_t line, std::size_t col,
+			std::string duplicate_name) : toml_error{ msg, line, col },
+			_duplicate_name{ std::move(duplicate_name) }
+		{}
+
+		const std::string& name() const { return _duplicate_name; }
+
+	private:
+		std::string _duplicate_name;
 	};
 
 	// Thrown by basic_node when calling fucntions on a node where good() == false
