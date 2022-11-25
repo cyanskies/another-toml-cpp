@@ -36,6 +36,11 @@
 #include <optional>
 #include <regex>
 
+#include "uni_algo/conv.h"
+#include "uni_algo/break_grapheme.h"
+#include "uni_algo/norm.h"
+#include "uni_algo/ranges.h"
+
 #include "another_toml/another_toml.hpp"
 
 #include "another_toml/except.hpp"
@@ -591,19 +596,9 @@ namespace another_toml
 						throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], escape_size } };
 				}
 
-				const auto u8 = to_u8_str<NoThrow>(unicode_char);
-				if constexpr (NoThrow)
-				{
-					if (!u8)
-					{
-						std::cerr << "Failed to convert unicode escape code to utf-8: "s << std::string_view{ &s[code_beg], escape_size } << '\n';
-						return {};
-					}
-				}
-
-				assert(u8);
-				s.replace(code_beg, escape_size, *u8);
-				pos = code_beg + size(*u8);
+				const auto u8 = unicode_u32_to_u8(unicode_char);
+				s.replace(code_beg, escape_size, u8);
+				pos = code_beg + size(u8);
 				continue;
 			}
 
@@ -642,6 +637,41 @@ namespace another_toml
 	std::string to_escaped_multiline2(std::string_view str)
 	{
 		return *to_escaped_string<false, true, false>(str);
+	}
+
+	std::string unicode_normalise(std::string_view str)
+	{
+		return uni::norm::to_nfc_utf8(str);
+	}
+	
+	// based on uni_algo/examples/cpp_ranges.h
+	bool unicode_string_equal(std::string_view lhs, std::string_view rhs)
+	{
+		// UTF-8 -> NFC for both strings
+		auto view1 = uni::ranges::norm::nfc_view{ uni::ranges::utf8_view{ lhs } };
+		auto view2 = uni::ranges::norm::nfc_view{ uni::ranges::utf8_view{ rhs } };
+
+		auto it1 = view1.begin();
+		auto it2 = view2.begin();
+
+		// Compare the strings by code points
+		for (; it1 != uni::sentinel && it2 != uni::sentinel; ++it1, ++it2)
+		{
+			if (*it1 != *it2)
+				return false;
+		}
+
+		// Reached the end in both strings then the strings are equal
+		if (it1 == uni::sentinel && it2 == uni::sentinel)
+			return true;
+
+		return false;
+	}
+
+	std::size_t unicode_count_graphemes(std::string_view str)
+	{
+		auto view = uni::ranges::grapheme::utf8_view{ str };
+		return distance(begin(view), end(view));
 	}
 
 	bool contains_unicode(std::string_view s) noexcept
@@ -686,11 +716,15 @@ namespace another_toml
 
 		int bytes = 1;
 		if (*beg & 0b01000000)
+		{
 			++bytes;
-		if (*beg & 0b00100000)
-			++bytes;
-		if (*beg & 0b00010000)
-			++bytes;
+			if (*beg & 0b00100000)
+			{
+				++bytes;
+				if (*beg & 0b00010000)
+					++bytes;
+			}
+		}
 
 		assert(bytes >= 1);
 		auto out = char32_t{};
@@ -722,47 +756,53 @@ namespace another_toml
 		return unicode_error_char;
 	}
 
-	template<bool NoThrow>
-	std::optional<std::string> to_u8_str(char32_t ch)
+	std::basic_string<char> to_code_units(char32_t ch)
 	{
-		auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ unicode_bad_conversion };
-		const auto u8 = cvt.to_bytes(ch);
-		if (u8 == unicode_bad_conversion)
+		auto out = std::basic_string<char>{};
+		if (ch < 0x80)
+			return { static_cast<char>(ch) };
+		else if (ch < 0x800)
 		{
-			if constexpr (NoThrow)
-			{
-				std::cerr << "Invalid utf-8 char"s;
-				return {};
-			}
-			else
-				throw toml_error{ "Invalid utf-8 chars"s };
+			return {
+				static_cast<char>((ch >> 6) | 0b11000000),
+				static_cast<char>((ch & 0b00111111) | 0b10000000)
+			};
 		}
-		return u8;
+		else if (ch < 0x10000)
+		{
+			return {
+				static_cast<char>((ch >> 12) | 0b11100000),
+				static_cast<char>(((ch >> 6) & 0b00111111) | 0b10000000),
+				static_cast<char>((ch & 0b00111111) | 0b10000000)
+			};
+		}
+		else if (ch < 0x10FFFF)
+		{
+			return {
+				static_cast<char>((ch >> 18) | 0b11110000),
+				static_cast<char>(((ch >> 12) & 0b00111111) | 0b10000000),
+				static_cast<char>(((ch >> 6) & 0b00111111) | 0b10000000),
+				static_cast<char>((ch & 0b00111111) | 0b10000000)
+			};
+		}
+		else
+		{
+			return {};
+		}
 	}
-
-	// instantiate with true for another_toml.cpp to use
-	template std::optional<std::string> to_u8_str<true>(char32_t);
 
 	std::string unicode_u32_to_u8(char32_t ch)
 	{
-		return *to_u8_str<false>(ch);
+		return unicode32_to_unicode8({ &ch, 1 });
 	}
 
 	std::string unicode32_to_unicode8(std::u32string_view unicode)
 	{
-		auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ {}, unicode32_bad_conversion };
-		const auto u8 = cvt.to_bytes(data(unicode), data(unicode) + size(unicode));
-		if (u8 == unicode_bad_conversion)
-			throw unicode_error{ "Failed to convert string to UTF-8"s };
-		return u8;
+		return uni::utf32to8(unicode);
 	}
 
 	std::u32string unicode8_to_unicode32(std::string_view unicode)
 	{
-		auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ {}, unicode32_bad_conversion };
-		const auto u32 = cvt.from_bytes(data(unicode), data(unicode) + size(unicode));
-		if (u32 == unicode32_bad_conversion)
-			throw unicode_error{ "Failed to convert string to UTF-32"s };
-		return u32;
+		return uni::utf8to32u(unicode);
 	}
 }

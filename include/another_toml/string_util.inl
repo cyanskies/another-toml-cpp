@@ -24,7 +24,7 @@ namespace another_toml
 {
 	constexpr bool is_unicode_start(char c) noexcept
 	{
-		return c & 0b11000000;
+		return c & 0x80 && c & 0x40;
 	}
 
 	constexpr bool is_unicode_continuation(char c) noexcept

@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.13)
 
+add_subdirectory(uni-algo)
+
 cmake_policy(SET CMP0048 NEW)
 project(another-toml-cpp VERSION 0.1 LANGUAGES CXX)
 
@@ -35,3 +37,4 @@ target_sources(${PROJECT_NAME}
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC ./include)
+target_link_libraries(${PROJECT_NAME} PRIVATE uni-algo)

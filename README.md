@@ -1,5 +1,5 @@
 # Another TOML
-Another TOML is a cpp parser and writer for TOML v1.0.
+Another TOML is a cpp17 parser and writer for TOML v1.0.
 
 Another TOML can be used to parse toml files without exceptions, as long as you call
 the functions to confirm that nodes are valid and the expected kind of toml element or value type.
@@ -7,6 +7,7 @@ the functions to confirm that nodes are valid and the expected kind of toml elem
 ## Installing
 * Clone this repository.
 * Include it in your project as a submodule.
+* Invoke: `git submodule update` to update Another TOMLs dependencies.
 * Configure it using cmake.
 * List `another-toml-cpp` as a dependency in `target_link_libraries`
 
@@ -300,7 +301,7 @@ for (auto elm : port_array)
 	ports.push_back(elm.as_integer());
 ```
 
-`get_value` can also be used to extract heterogeneous arrays directly into a container.
+`get_value` can also be used to extract homogeneous arrays (an array with all elements of the same type) directly into a container.
 
 ```cpp
 auto ports = database.get_value<std::vector<std::int64_t>>("ports");
@@ -464,7 +465,7 @@ w.write_value(8002);
 w.end_array();
 ```
 
-You can also write heterogeneous arrays by passing a container
+You can also write homogeneous arrays by passing a container
 to the `write` function.
 
 ```cpp
@@ -563,12 +564,12 @@ w.end_array_table();
 
 #### Outputting the Completed Document
 You must end any open tables/arrays or inline arrays before generating the
-TOML document. You can use `to_string()` to generate a `std::string` containing
+TOML document (The root table is an exception). You can use `to_string()` to generate a `std::string` containing
 the TOML document or you can stream it to any standard output stream.
 
 ```cpp
 auto toml_str = w.to_string(); // make a string variable
-std::cout << w; // stream out to the console
+std::cout << w; // stream to standard output
 ```
 
 ### Writer Output Options
@@ -605,9 +606,9 @@ w.write_value(50, toml::writer::float_rep::scientific, 6);
 ```
 
 The supported representations are:
-* **default**: notation will be chose based on the floats value
-* **fixed**: fractional notation(eg. 3.14)
-* **scientific**: scientific notation(eg. 10e-4)
+* **default**: notation will be chosen based on the floats value
+* **fixed**: fractional notation (eg. 3.14)
+* **scientific**: scientific notation (eg. 10e-4)
 
 Precision controls how many decimal places of precision will be written. Pass
 `writer::auto_precision` to have it chosen dynamically.
@@ -662,7 +663,11 @@ If enabled adds an indentation of each layer of child table, the indentation is 
 
 ```toml
 [a]
+name="a"
+
 	[a.b]
+	key="value"
+
 		[a.b.c]
 
 #indentation isn't added for skipped tables(see skip empty tables)
@@ -719,8 +724,8 @@ Set `writer_options::date_time_separator`.
 Choose which character to use to separate the date and time portions of 
 datetime and local datetime types:
 
-* `writer_options::date_time_separator_t::big_t`
-* `writer_options::date_time_separator_t::whitespace` (default)
+* `writer_options::date_time_separator_t::big_t` (default)
+* `writer_options::date_time_separator_t::whitespace` 
 
 ##### Simple Numerical Output
 Set `writer_options::simple_numerical_output`.

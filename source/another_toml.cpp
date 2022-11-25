@@ -32,6 +32,8 @@
 #include <variant>
 #include <vector>
 
+#include "uni_algo/break_grapheme.h"
+
 #include "another_toml/except.hpp"
 #include "another_toml/internal.hpp"
 #include "another_toml/node.hpp"
@@ -1618,7 +1620,7 @@ namespace another_toml
 			while (true)
 			{
 				auto& child_ref = d.nodes[child];
-				if (child_ref.name == n.name && !allow_duplicates)
+				if (unicode_string_equal(child_ref.name, n.name) && !allow_duplicates)
 				{
 					if (child_ref.type == node_type::table && 
 						n.type == node_type::table &&
@@ -1657,7 +1659,7 @@ namespace another_toml
 		while (next != bad_index)
 		{
 			auto c = &d.nodes[next];
-			if (c->name == s)
+			if (unicode_string_equal(c->name, s))
 				break;
 			next = c->next;
 		}
@@ -1842,12 +1844,28 @@ namespace another_toml
 		return insert_child<NoThrow>(d, parent, std::move(table));
 	}
 
+	constexpr auto error_entire_line = std::numeric_limits<std::size_t>::max();
+	constexpr auto error_current_col = std::numeric_limits<std::size_t>::max() - 1;
+
+	static void parse_line(parser_state& strm)
+	{
+		if (strm.toml_file.back() != '\n')
+		{
+			auto [ch, eof] = strm.get_char<true>();
+			while (!eof && ch != '\n')
+				std::tie(ch, eof) = strm.get_char<true>();
+		}
+	}
+
 	static void print_error_string(parser_state& strm, std::size_t error_begin, std::size_t error_end,
 		std::ostream& cerr)
 	{
 		auto line_display_strm = std::ostringstream{};
 		line_display_strm << strm.line + 1 << '>';
 		const auto line_display = line_display_strm.str();
+
+		if (error_end == error_current_col)
+			error_end = strm.toml_file.find_last_not_of(' ');
 
 		if (strm.toml_file.back() != '\n')
 		{
@@ -1856,30 +1874,63 @@ namespace another_toml
 				std::tie(ch, eof) = strm.get_char<true>();
 		}
 
+		if (error_end == error_entire_line)
+			error_end = strm.toml_file.find_last_not_of(' ') - 1;
+
 		cerr << line_display << strm.toml_file;
 		if(strm.toml_file.back() != '\n')
 			cerr << '\n';
 
-		error_begin += size(line_display);
-
-		if (error_end == std::numeric_limits<std::size_t>::max())
-			error_end = size(line_display) + size(strm.toml_file) - 1;
-		else
-			error_end += size(line_display);
+		for (auto i = std::size_t{}; i < size(line_display); ++i)
+			cerr.put(' ');
 		
-		for (auto i = char_count_t{}; i < error_end; ++i)
+		auto begin_addr = &strm.toml_file[error_begin];
+		auto end_addr = &strm.toml_file[error_end];
+
+		auto view = uni::ranges::grapheme::utf8_view{ strm.toml_file };
+
+		auto begin_found = false;
+		auto end_found = false;
+
+		const char* prev = {};
+		
+		auto count = std::size_t{};
+		for (auto& ch : view)
 		{
-			if (i == error_end - 1)
-			cerr.put('^');
-			else if (i < error_begin )
-				cerr.put(' ');
-			else if (i == error_begin)
+			if (!begin_found &&
+				ch.data() >= begin_addr)
+			{
+				begin_found = true;
+				error_begin = count;
+			}
+
+			if (!end_found &&
+				ch.data() >= end_addr)
+			{
+				end_found = true;
+				error_end = count;
+			}
+
+			++count;
+			prev = ch.data();
+		}
+
+		count = {};
+
+		for (auto& ch : view)
+		{
+			if (count == error_end)
 				cerr.put('^');
-			
-			else if (i >= error_end)
+			else if (count < error_begin )
+				cerr.put(' ');
+			else if (count == error_begin)
+				cerr.put('^');
+			else if (count > error_end)
 				break;
 			else
 				cerr.put('~');
+
+			++count;
 		}
 
 		return;
@@ -1896,7 +1947,7 @@ namespace another_toml
 
 			while (node)
 			{
-				if (node->name == name)
+				if (unicode_string_equal(node->name, name))
 				{
 					if (node->type == node_type::array_tables)
 					{
@@ -1966,13 +2017,6 @@ namespace another_toml
 		return ret;
 	}
 
-	// access a template func from string_util.cpp
-	template<bool NoThrow>
-	std::optional<std::string> to_u8_str(char32_t ch);
-
-	extern template std::optional<std::string> to_u8_str<true>(char32_t ch);
-	extern template std::optional<std::string> to_u8_str<false>(char32_t ch);
-
 	// variant of unicode_u8_to_u32 that reads from parser_state
 	static char32_t parse_unicode_char(char c, parser_state& strm) noexcept
 	{
@@ -1981,11 +2025,15 @@ namespace another_toml
 
 		int bytes = 1;
 		if (c & 0b01000000)
+		{
 			++bytes;
-		if (c & 0b00100000)
-			++bytes;
-		if (c & 0b00010000)
-			++bytes;
+			if (c & 0b00100000)
+			{
+				++bytes;
+				if (c & 0b00010000)
+					++bytes;
+			}
+		}
 
 		assert(bytes >= 1);
 		auto out = std::uint32_t{};
@@ -2061,14 +2109,14 @@ namespace another_toml
 				if constexpr (NoThrow)
 				{
 					std::cerr << missing_end_error_msg;
-					print_error_string(strm, string_begin, strm.col, std::cerr);
+					print_error_string(strm, string_begin, error_entire_line, std::cerr);
 					return {};
 				}
 				else
 				{
 					auto string = std::ostringstream{};
 					string << missing_end_error_msg;
-					print_error_string(strm, string_begin, strm.col, string);
+					print_error_string(strm, string_begin, error_entire_line, string);
 					throw unexpected_character{ string.str(), strm.line, strm.col };
 				}
 			}
@@ -2130,18 +2178,8 @@ namespace another_toml
 				}
 				else
 				{
-					const auto u8 = to_u8_str<NoThrow>(unicode);
-					if constexpr (NoThrow)
-					{
-						if (!u8)
-						{
-							std::cerr << "Invalid unicode character in string\n"s;
-							return {};
-						}
-					}
-
-					assert(u8);
-					out.append(*u8);
+					const auto u8 = unicode_u32_to_u8(unicode);
+					out.append(u8);
 					continue;
 				}
 			}
@@ -2196,6 +2234,14 @@ namespace another_toml
 	extern template std::optional<std::string> replace_escape_chars<true>(std::string_view);
 	extern template std::optional<std::string> replace_escape_chars<false>(std::string_view);
 
+	std::string_view block_control(std::string_view s)
+	{
+		if (s[0] < 0x20)
+			return "\ufffd"sv;
+		else
+			return s;
+	}
+
 	template<bool NoThrow, bool Table = false>
 	static key_name parse_key_name(parser_state& strm, detail::toml_internal_data& d, std::size_t& key_char_begin)
 	{
@@ -2216,7 +2262,7 @@ namespace another_toml
 				if (eof)
 				{
 					std::cerr << "Unexpected end-of-file in table/key name.\n";
-					print_error_string(strm, strm.col, strm.col, std::cerr);
+					print_error_string(strm, strm.col - 1, strm.col - 1, std::cerr);
 					insert_bad(d);
 					return {};
 				}
@@ -2235,14 +2281,14 @@ namespace another_toml
 					{
 						std::cerr << msg;
 						insert_bad(d);
-						print_error_string(strm, name_begin, strm.col, std::cerr);
+						print_error_string(strm, name_begin, error_current_col, std::cerr);
 						return {};
 					}
 					else
 					{
 						auto string = std::ostringstream{};
 						string << msg;
-						print_error_string(strm, name_begin, strm.col, string);
+						print_error_string(strm, name_begin, error_current_col, string);
 						throw unexpected_character{ string.str(), strm.line, strm.col };
 					}
 				}
@@ -2344,14 +2390,14 @@ namespace another_toml
 					{
 						insert_bad(d);
 						std::cerr << msg;
-						print_error_string(strm, name_begin, strm.col, std::cerr);
+						print_error_string(strm, name_begin, error_current_col, std::cerr);
 						return {};
 					}
 					else
 					{
 						auto string = std::ostringstream{};
 						string << msg;
-						print_error_string(strm, name_begin, strm.col, string);
+						print_error_string(strm, name_begin, error_current_col, string);
 						throw unexpected_character{ string.str(), strm.line, strm.col };
 					}
 				}
@@ -2392,6 +2438,7 @@ namespace another_toml
 							const auto write_error = [&strm, &c](std::ostream& o) {
 								const auto msg = "Attempted to add to a previously defined table: \"" + c.name +
 									"\" using dotted keys.\n"s;
+								// TODO: displays wrong
 								const auto name_end = strm.col - 1;
 								const auto name_beg = name_end - size(c.name);
 								o << msg;
@@ -2448,7 +2495,7 @@ namespace another_toml
 				}
 			}
 
-			const auto handle_character_error = [&strm, &d, ch] {
+			const auto handle_character_error = [&strm, &d] {
 				// eof exception is given more context in the calling function.
 				const auto [ch, eof] = strm.get_char<NoThrow>();
 				if constexpr (NoThrow)
@@ -2456,16 +2503,21 @@ namespace another_toml
 					if (eof)
 					{
 						std::cerr << "Unexpected end-of-file in table/key name.\n";
-						print_error_string(strm, strm.col, strm.col, std::cerr);
+						print_error_string(strm, strm.col - 1, strm.col - 1, std::cerr);
 						insert_bad(d);
 						return;
 					}
 				}
 
-				const auto print_error = [&strm, ch](std::ostream& str) {
-					str << "Unexpected character found in table/key name: \'"s << ch <<
+				const auto ch_index = strm.col - 1;
+				const auto print_error = [&strm, ch_index](std::ostream& o) {
+					parse_line(strm);
+					const auto str = std::string_view{ &strm.toml_file[ch_index] };
+					auto graph_rng = uni::ranges::grapheme::utf8_view{ str };
+					o << "Unexpected character found in table/key name: \'"s <<
+						block_control(*begin(graph_rng)) <<
 						"\'.\n"s;
-					print_error_string(strm, strm.col, strm.col, str);
+					print_error_string(strm, ch_index, ch_index, o);
 				};
 
 				if constexpr (NoThrow)
@@ -2477,7 +2529,7 @@ namespace another_toml
 				else
 				{
 					const auto line = strm.line,
-						col = strm.col;
+						col = ch_index;
 					auto str = std::ostringstream{};
 					print_error(str);
 					throw unexpected_character{ str.str(), line, col };
@@ -3183,7 +3235,7 @@ namespace another_toml
 		{
 			auto str = std::ostringstream{};
 			str << "Unexpected end-of-file in table/key name.\n";
-			print_error_string(strm, strm.col, strm.col, str);
+			print_error_string(strm, strm.col - 1, strm.col - 1, str);
 
 			throw unexpected_eof{ str.str(), err.line(), err.column() };
 		}
@@ -3312,12 +3364,6 @@ namespace another_toml
 		return ret;
 	}
 
-	static std::string chtos(char c)
-	{
-		// 0x20 == control chars;
-		return  c < 0x20 ? "\ufffd"s : std::string{ c }; 
-	}
-
 	template<bool NoThrow, bool Array>
 	static index_t parse_table_header(parser_state& strm, toml_internal_data& toml_data)
 	{
@@ -3337,7 +3383,7 @@ namespace another_toml
 		{
 			auto str = std::ostringstream{};
 			str << "Unexpected end-of-file in table name.\n";
-			print_error_string(strm, strm.col, strm.col, str);
+			print_error_string(strm, strm.col - 1, strm.col - 1, str);
 
 			throw unexpected_eof{ str.str(), err.line(), err.column() };
 		}
@@ -3367,12 +3413,17 @@ namespace another_toml
 
 		if (ch != ']')
 		{
-			const auto msg = "Unexpected character following table name: \'"s + ch +
+			const auto ch_index = strm.col - 1;
+			parse_line(strm);
+			const auto str = std::string_view{ &strm.toml_file[ch_index] };
+			auto graph_rng = uni::ranges::grapheme::utf8_view{ str };
+			const auto msg = "Unexpected character following table name: \'"s +
+				std::string{ block_control(*begin(graph_rng)) } +
 				"\'; was expecting \']\'\n"s;
 			if constexpr (NoThrow)
 			{
 				std::cerr << msg;
-				print_error_string(strm, strm.col, strm.col, std::cerr);
+				print_error_string(strm, ch_index, ch_index, std::cerr);
 				insert_bad(toml_data);
 				return bad_index;
 			}
@@ -3380,8 +3431,8 @@ namespace another_toml
 			{
 				auto string = std::ostringstream{};
 				string << msg;
-				print_error_string(strm, strm.col, strm.col, string);
-				throw unexpected_character{ string.str(), strm.line, strm.col };
+				print_error_string(strm, ch_index, ch_index, string);
+				throw unexpected_character{ string.str(), strm.line, ch_index };
 			}
 		}
 
@@ -3396,11 +3447,16 @@ namespace another_toml
 
 			if (ch != ']')
 			{
-				const auto write_error = [&strm, ch](std::ostream& o) {
+				const auto ch_index = strm.col - 1;
+				const auto write_error = [&strm, ch_index](std::ostream& o) {
 					o << "Unexpected character while parsing array table header : \'"s;
-					o << chtos(ch);
+					// split the first grapheme off from the current location and draw it.
+					parse_line(strm);
+					const auto str = std::string_view{ &strm.toml_file[ch_index] };
+					auto graph_rng = uni::ranges::grapheme::utf8_view{ str };
+					o << block_control(*begin(graph_rng));
 					o << "\', was expecting ']'.\n";
-					print_error_string(strm, strm.col, strm.col, o);
+					print_error_string(strm, ch_index, ch_index, o);
 					return;
 				};
 
@@ -3413,7 +3469,7 @@ namespace another_toml
 				else
 				{
 					auto str = std::ostringstream{};
-					const auto line = strm.line, col = strm.col;
+					const auto line = strm.line, col = ch_index;
 					write_error(str);
 					throw unexpected_character{ str.str(), line, col };
 				}
@@ -3486,7 +3542,7 @@ namespace another_toml
 			auto str = std::ostringstream{};
 			const auto line = strm.line, col = strm.col;
 			constexpr auto end_offset = Array ? 2 : 1;
-			print_error_string(strm, key_name_begin, strm.col - end_offset, str);
+			print_error_string(strm, key_name_begin, strm.col - end_offset - 1, str);
 			throw duplicate_element{ err.what() + str.str(), line, col, err.name() };
 		}
 
@@ -3540,7 +3596,7 @@ namespace another_toml
 			// only take 1 in the case of
 			//	[table]error
 			const auto error_begin = *strm.toml_file.rbegin() == ' ' ? strm.col - 2 : strm.col - 1;
-			print_error_string(strm, error_begin, std::numeric_limits<std::size_t>::max(), str);
+			print_error_string(strm, error_begin, error_entire_line, str);
 
 			if constexpr (NoThrow)
 			{

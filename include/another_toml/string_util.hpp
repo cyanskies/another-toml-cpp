@@ -81,12 +81,15 @@ namespace another_toml
 	// Set ascii_output to return an ASCII string; unicode chars will be escaped.
 	std::string escape_toml_name(std::string_view str, bool ascii_ouput = false);
 
+	bool unicode_string_equal(std::string_view lhs, std::string_view rhs);
+	std::size_t unicode_count_graphemes(std::string_view);
+
 	// returns true if string contains any unicode code units
 	bool contains_unicode(std::string_view s) noexcept;
 	// returns true if 's' only contains valid UTF-8 code points
 	bool valid_unicode_string(std::string_view s) noexcept;
 
-	constexpr auto unicode_error_char = char32_t{ 0xD7FF17 };
+	constexpr auto unicode_error_char = char32_t{ 0x110000 };
 	// Converts the first code point in str into a UTF-32 char
 	// Returns unicode_error_char on failure
 	char32_t unicode_u8_to_u32(std::string_view str) noexcept;
