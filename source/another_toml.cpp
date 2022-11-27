@@ -42,6 +42,10 @@
 
 #include "another_toml/string_util.hpp"
 
+// Disable warning for characters and the current code page.
+// All string operations are for utf8 encoded strings.
+#pragma warning(disable : 4566)
+
 using namespace std::string_literals;
 using namespace std::string_view_literals;
 
@@ -1628,10 +1632,16 @@ namespace another_toml
 						p.table_type == n.table_type)
 						return child;
 
+					const auto msg = "Tried to insert duplicate element: "s + n.name +
+						", into: "s + (parent == 0 ? "root table"s : p.name) + ".\n"s;
+
 					if constexpr (NoThrow)
+					{
+						std::cerr << msg;
 						return bad_index;
+					}
 					else
-						throw duplicate_element{ "Tried to insert duplicate element: "s + n.name + ", into: " + p.name, {}, {}, n.name };
+						throw duplicate_element{ msg, {}, {}, n.name };
 				}
 
 				if (child_ref.next == bad_index)
@@ -1881,7 +1891,11 @@ namespace another_toml
 		}
 
 		if (error_end == error_current_col)
+		{
 			error_end = strm.toml_file.find_last_not_of(' ');
+			if (error_end > size(strm.toml_file))
+				error_end = error_entire_line;
+		}
 
 		if (strm.toml_file.back() != '\n')
 		{
@@ -2296,7 +2310,7 @@ namespace another_toml
 	extern template std::optional<std::string> replace_escape_chars<true>(std::string_view);
 	extern template std::optional<std::string> replace_escape_chars<false>(std::string_view);
 
-	std::string_view block_control(std::string_view s)
+	std::string_view block_control(std::string_view s) noexcept
 	{
 		if (empty(s) || s[0] < 0x20)
 			return "\ufffd"sv;
@@ -2363,13 +2377,21 @@ namespace another_toml
 			{
 				if (name)
 				{
+					constexpr auto msg = "Unexpected character in key name: \"\n";
+
 					if constexpr (NoThrow)
 					{
-						std::cerr << "Unexpected character in name: \"\n";
+						std::cerr << msg;
+						print_error_string(strm, strm.col - 1, strm.col, std::cerr);
 						return {};
 					}
 					else
-						throw unexpected_character{ "Unexpected character in name: \"" };
+					{
+						auto str = std::ostringstream{};
+						str << msg;
+						print_error_string(strm, strm.col - 1, strm.col, str);
+						throw unexpected_character{ str.str(), strm.line, strm.col };
+					}
 				}
 				name = get_quoted_str<NoThrow, true>(strm);
 				if constexpr (NoThrow)
@@ -3045,7 +3067,7 @@ namespace another_toml
 				}
 				else if (dist > 5 && ch != quote_char)
 				{
-					auto seq_begin = distance(rb, re);
+					auto seq_begin = strm.col - distance(rbegin(str), rb) - 1;
 					const auto print_error = [&strm, seq_begin](std::ostream& o) {
 						o << "Invalid sequence in multiline string.\n"s;
 						print_error_string(strm, seq_begin, error_current_col, o);
@@ -3061,7 +3083,7 @@ namespace another_toml
 						const auto line = strm.line,
 							col = strm.col;
 						auto str = std::ostringstream{};
-					print_error(str);
+						print_error(str);
 						throw parsing_error{ str.str(), line, col };
 					}
 				}
@@ -3111,6 +3133,7 @@ namespace another_toml
 			strm.ignore();
 			if (strm.strm.peek() == quote_char)
 			{
+				const auto str_start = strm.col - 2;
 				strm.ignore();
 				str = multiline_string<NoThrow, DoubleQuote>(strm);
 				if (!str)
@@ -3118,9 +3141,23 @@ namespace another_toml
 
 				if constexpr (DoubleQuote)
 				{
-					str = replace_escape_chars<NoThrow>(*str);
-					if (!str)
-						return false;
+					try
+					{
+						str = replace_escape_chars<NoThrow>(*str);
+						if (!str)
+						{
+							print_error_string(strm, str_start, strm.col, std::cerr);
+							insert_bad(toml_data);
+							return false;
+						}
+					}
+					catch (const unicode_error& e)
+					{
+						auto string = std::ostringstream{};
+						string << e.what() << '\n';
+						print_error_string(strm, str_start, strm.col, string);
+						throw unicode_error{ string.str(), strm.line, strm.col };
+					}
 				}
 			}
 			else
@@ -3129,12 +3166,12 @@ namespace another_toml
 		else
 		{
 			//start normal quote str
+			const auto str_start = strm.col - 1;
 			str = get_quoted_str<NoThrow, DoubleQuote>(strm);
 			if constexpr (NoThrow)
 			{
 				if (!str)
 				{
-					//std::cerr << "Illigal character in string"s;
 					insert_bad(toml_data);
 					return false;
 				}
@@ -3142,22 +3179,42 @@ namespace another_toml
 
 			if constexpr (DoubleQuote)
 			{
-				str = replace_escape_chars<NoThrow>(*str);
-				if (!str)
-					return false;
+				try
+				{
+					str = replace_escape_chars<NoThrow>(*str);
+					if (!str)
+					{
+						print_error_string(strm, str_start, strm.col + 1, std::cerr);
+						insert_bad(toml_data);
+						return false;
+					}
+				}
+				catch (const unicode_error& e)
+				{
+					auto string = std::ostringstream{};
+					string << e.what() << '\n';
+					print_error_string(strm, str_start, strm.col + 1, string);
+					throw unicode_error{ string.str(), strm.line, strm.col};
+				}
 			}
 
 			if (strm.strm.peek() == quote_char)
 				strm.ignore();
 			else
 			{
+				constexpr auto msg = "Unexpected error in quoted string.\n";
 				if constexpr (NoThrow)
 				{
-					std::cerr << "Illigal character in quoted string"s;
+					std::cerr << msg;
+					print_error_string(strm, str_start, strm.col + 1, std::cerr);
 					return false;
 				}
 				else
-					throw unexpected_character{ "Illigal character in quoted string"s };
+				{
+					auto string = std::ostringstream{};
+					print_error_string(strm, str_start, strm.col + 1, string);
+					throw unicode_error{ string.str(), strm.line, strm.col };
+				}
 			}
 		}
 
@@ -3332,7 +3389,7 @@ namespace another_toml
 		const auto parent = strm.stack.back();
 		const auto& p = toml_data.nodes[parent];
 		assert(p.type == node_type::key || p.type == node_type::array);
-		const auto table = insert_child<NoThrow>(toml_data, parent, internal_node{ {}, node_type::inline_table });
+		const auto table = insert_child<NoThrow>(toml_data, parent, internal_node{ p.name, node_type::inline_table });
 		strm.stack.emplace_back(table);
 		strm.token_stream.emplace_back(token_type::inline_table);
 		while (strm.strm.good())
@@ -3500,17 +3557,32 @@ namespace another_toml
 			strm.open_tables.emplace_back(key_str.parent);
 
 		auto key = detail::internal_node{ std::move(*key_str.name), node_type::key };
-		const auto key_index = insert_child<NoThrow>(toml_data, key_str.parent, std::move(key));
-
-		if constexpr (NoThrow)
+		try
 		{
-			if (key_index == bad_index)
-				return false;
+			const auto key_index = insert_child<NoThrow>(toml_data, key_str.parent, std::move(key));
+
+			if constexpr (NoThrow)
+			{
+				if (key_index == bad_index)
+				{
+					strm.putback();
+					print_error_string(strm, key_name_begin, error_current_col, std::cerr);
+					return false;
+				}
+			}
+
+			strm.stack.emplace_back(key_index);
+			strm.token_stream.emplace_back(token_type::key);
 		}
-		
-		strm.stack.emplace_back(key_index);
-		strm.token_stream.emplace_back(token_type::key);
-		
+		catch (duplicate_element& e)
+		{
+			auto str = std::ostringstream{};
+			str << e.what();
+			strm.putback();
+			print_error_string(strm, key_name_begin, error_current_col, str);
+			throw duplicate_element{ str.str(), strm.line, key_name_begin, e.name() };
+		}
+
 		if (whitespace(ch, strm))
 			std::tie(ch, eof) = strm.get_char<NoThrow>();
 
@@ -3981,9 +4053,9 @@ namespace another_toml
 						parse_line(p_state);
 						const auto str = std::string_view{ &p_state.toml_file[ch_index] };
 						auto graph_rng = uni::ranges::grapheme::utf8_view{ str };
-						o << "Unexpected character found following value: \'"s <<
+						o << "Unexpected character found: \'"s <<
 							block_control(*begin(graph_rng)) <<
-							"\', expected newline.\n"s;
+							"\', following value; expected newline.\n"s;
 						print_error_string(p_state, ch_index, ch_index + 1, o);
 					};
 
@@ -4002,6 +4074,8 @@ namespace another_toml
 						throw unexpected_character{ str.str(), line, col };
 					}
 				}
+
+				p_state.nextline();
 			}
 			else
 			{

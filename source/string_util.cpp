@@ -35,6 +35,7 @@
 #include <locale>
 #include <optional>
 #include <regex>
+#include <sstream>
 
 #include "uni_algo/conv.h"
 #include "uni_algo/break_grapheme.h"
@@ -692,6 +693,9 @@ namespace another_toml
 	//	'\b', '\t', '\n', '\f', '\r', '\"', '\\' // "\\uXXXX" "\\UXXXXXXXX"
 	//};
 
+	// defined in another_toml.cpp
+	std::string_view block_control(std::string_view s) noexcept;
+
 	// replace string chars with proper escape codes
 	template<bool NoThrow>
 	std::optional<std::string> replace_escape_chars(std::string_view str)
@@ -777,7 +781,7 @@ namespace another_toml
 						return {};
 					}
 					else
-						throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], escape_size } };
+						throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], escape_size} };
 				}
 
 				auto int_val = std::uint_least32_t{};
@@ -794,7 +798,7 @@ namespace another_toml
 						return {};
 					}
 					else
-						throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], escape_size } };
+						throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], escape_size} };
 				}
 
 				const auto u8 = unicode_u32_to_u8(unicode_char);
@@ -803,13 +807,25 @@ namespace another_toml
 				continue;
 			}
 
+			const auto write_error = [str, code_mid](std::ostream& o) {
+				const auto string = std::string_view{ &str[code_mid] };
+				auto graph_rng = uni::ranges::grapheme::utf8_view{ string };
+				o << "Illigal escape code in quoted string: \"\\"s <<
+					block_control(*begin(graph_rng)) <<
+					"\".\n"s;
+			};
+
 			if constexpr (NoThrow)
 			{
-				std::cerr << "Illigal escape code in quoted string: \"\\"s << s[code_mid] << "\"\n"s;
+				write_error(std::cerr);
 				return {};
 			}
 			else
-				throw unicode_error{ "Illigal escape code in quoted string: \"\\"s + s[code_mid] + "\""s };
+			{
+				auto string = std::ostringstream{};
+				write_error(string);
+				throw unicode_error{ string.str() };
+			}
 
 			++pos;
 		}
