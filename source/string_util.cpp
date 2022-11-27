@@ -74,44 +74,101 @@ namespace another_toml
 	}
 	using reg_matches = std::match_results<std::string_view::iterator>;
 
-	static std::optional<date> fill_date(const reg_matches& matches) noexcept
+	template<bool NoThrow>
+	static std::optional<date> fill_date(const reg_matches& matches) noexcept(NoThrow)
 	{
-		const auto error_msg = "Error parsing date"s;
-
 		auto out = date{};
 		assert(matches[static_cast<std::size_t>(match_index::date)].matched);
 		const auto& years = matches[static_cast<std::size_t>(match_index::year)];
 		assert(years.matched);
 		auto ret = std::from_chars(&*years.first, &*years.second, out.year);
+		
+		constexpr auto years_range = "Year value out of range.\n";
+
+		if (ret.ptr == &*years.first && ret.ec == std::errc::result_out_of_range)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << years_range;
+				return {};
+			}
+			else throw parsing_error{ years_range };
+		}
+		
 		if (ret.ptr != &*years.second)
 		{
-			std::cerr << error_msg;
-			return {};
+			constexpr auto year_error = "Error parsing year.\n";
+			if constexpr (NoThrow)
+			{
+				std::cerr << year_error;
+				return {};
+			}
+			else throw parsing_error{ year_error };
 		}
 
 		const auto& months = matches[static_cast<std::size_t>(match_index::month)];
 		assert(months.matched);
 		ret = std::from_chars(&*months.first, &*months.second, out.month);
+		
+		constexpr auto month_range = "Month value out of range.\n";
+
+		if (ret.ptr == &*months.first && ret.ec == std::errc::result_out_of_range)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << month_range;
+				return {};
+			}
+			else throw parsing_error{ month_range };
+		}
+
 		if (ret.ptr != &*months.second)
 		{
-			std::cerr << error_msg;
-			return {};
+			constexpr auto month_error = "Error parsing month.\n";
+			if constexpr (NoThrow)
+			{
+				std::cerr << month_error;
+				return {};
+			}
+			else throw parsing_error{ month_error };
 		}
 
 		if (out.month == 0 || out.month > 12)
 		{
-			std::cerr << "Month out of range\n"s;
-			return {};
+			if constexpr (NoThrow)
+			{
+				std::cerr << month_range;
+				return {};
+			}
+			else throw parsing_error{ month_range };
 		}
 
 		const auto& days = matches[static_cast<std::size_t>(match_index::day)];
 		assert(days.matched);
 		const auto day_end = &*days.first + days.length();
 		ret = std::from_chars(&*days.first, day_end, out.day);
+		
+		constexpr auto day_range = "Day value out of range.\n";
+
+		if (ret.ptr == &*days.first && ret.ec == std::errc::result_out_of_range)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << day_range;
+				return {};
+			}
+			else throw parsing_error{ day_range };
+		}
+
 		if (ret.ptr != day_end)
 		{
-			std::cerr << error_msg;
-			return {};
+			constexpr auto day_error = "Error parsing day value.\n";
+			if constexpr (NoThrow)
+			{
+				std::cerr << day_error;
+				return {};
+			}
+			else throw parsing_error{ day_error };
 		}
 
 		auto max_days = 31;
@@ -132,63 +189,129 @@ namespace another_toml
 
 		if (out.day == 0 || out.day > max_days)
 		{
-			std::cerr << "Day out of range\n"s;
-			return {};
+			if constexpr (NoThrow)
+			{
+				std::cerr << day_range;
+				return {};
+			}
+			else throw parsing_error{ day_range };
 		}
 
 		return out;
 	}
 
-	static std::optional<time> fill_time(const reg_matches& matches) noexcept
+	template<bool NoThrow>
+	static std::optional<time> fill_time(const reg_matches& matches) noexcept(NoThrow)
 	{
-		const auto error_parsing_time_msg = "Error parsing time"s;
-
 		auto out = time{};
 		assert(matches[static_cast<std::size_t>(match_index::time)].matched);
 		const auto& hours = matches[static_cast<std::size_t>(match_index::hours)];
 		assert(hours.matched);
 		auto ret = std::from_chars(&*hours.first, &*hours.second, out.hours);
-		if (ret.ptr != &*hours.second)
+		
+		constexpr auto hour_error = "Hours value out of range.\n";
+		if (ret.ptr == &*hours.first && ret.ec == std::errc::result_out_of_range)
 		{
-			std::cerr << error_parsing_time_msg;
-			return {};
+			if constexpr (NoThrow)
+			{
+				std::cerr << hour_error;
+				return {};
+			}
+			else throw parsing_error{ hour_error };
+		}
+		else if (ret.ptr != &*hours.second)
+		{
+			constexpr auto hours_error2 = "Error while parsing hours.\n";
+			if constexpr (NoThrow)
+			{
+				std::cerr << hours_error2;
+				return {};
+			}
+			else throw parsing_error{ hours_error2 };
 		}
 
 		if (out.hours > 23)
 		{
-			std::cerr << "Hours out of range\n"s;
-			return {};
+			if constexpr (NoThrow)
+			{
+				std::cerr << hour_error;
+				return {};
+			}
+			else throw parsing_error{ hour_error };
 		}
 
 		const auto& minutes = matches[static_cast<std::size_t>(match_index::minues)];
 		assert(minutes.matched);
 		ret = std::from_chars(&*minutes.first, &*minutes.second, out.minutes);
+		constexpr auto minutes_range = "Minutes value out of range.\n";
+		
+		if (ret.ptr == &*minutes.first && ret.ec == std::errc::result_out_of_range)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << minutes_range;
+				return {};
+			}
+			else throw parsing_error{ minutes_range };
+		}
+		
 		if (ret.ptr != &*minutes.second)
 		{
-			std::cerr << error_parsing_time_msg;
-			return{};
+			constexpr auto minutes_error2 = "Error parsing minutes.\n";
+			if constexpr (NoThrow)
+			{
+				std::cerr << minutes_error2;
+				return{};
+			}
+			else throw parsing_error{ minutes_error2 };
 		}
 
 		if (out.minutes > 59)
 		{
-			std::cerr << "Minutes out of range\n"s;
-			return {};
+			if constexpr (NoThrow)
+			{
+				std::cerr << minutes_range;
+				return {};
+			}
+			else throw parsing_error{ minutes_range };
 		}
 
 		const auto& seconds = matches[static_cast<std::size_t>(match_index::seconds)];
 		assert(seconds.matched);
 		const auto seconds_end = &*seconds.first + seconds.length();
 		ret = std::from_chars(&*seconds.first, seconds_end, out.seconds);
+		
+		constexpr auto seconds_error = "Seconds value out of range.\n";
+
+		if (ret.ptr == &*seconds.first && ret.ec == std::errc::result_out_of_range)
+		{
+			if constexpr (NoThrow)
+			{
+				std::cerr << seconds_error;
+				return {};
+			}
+			else throw parsing_error{ seconds_error };
+		}
+		
 		if (ret.ptr != seconds_end)
 		{
-			std::cerr << error_parsing_time_msg;
-			return{};
+			constexpr auto seconds_error2 = "Error parsing seconds.\n";
+			if constexpr (NoThrow)
+			{
+				std::cerr << seconds_error2;
+				return{};
+			}
+			else throw parsing_error{ seconds_error2 };
 		}
 
 		if (out.seconds > 60)
 		{
-			std::cerr << "Seconds out of range\n"s;
-			return {};
+			if constexpr (NoThrow)
+			{
+				std::cerr << seconds_error;
+				return {};
+			}
+			else throw parsing_error{ seconds_error };
 		}
 
 		const auto& seconds_frac = matches[static_cast<std::size_t>(match_index::seconds_frac)];
@@ -196,20 +319,38 @@ namespace another_toml
 		{
 			const auto frac_end = &*seconds_frac.first + seconds_frac.length();
 			ret = std::from_chars(&*seconds_frac.first, frac_end, out.seconds_frac);
+			constexpr auto seconds_frac_range = "Seconds fractional component out of range.\n";
+			
+			if (ret.ptr == &*seconds_frac.first && ret.ec == std::errc::result_out_of_range)
+			{
+				if constexpr (NoThrow)
+				{
+					std::cerr << seconds_frac_range;
+					return {};
+				}
+				else throw parsing_error{ seconds_frac_range };
+			}
+			
 			if (ret.ptr != frac_end)
 			{
-				std::cerr << error_parsing_time_msg;
-				return{};
+				constexpr auto seconds_frac_error = "Error parsing seconds fractional component.\n";
+				if constexpr (NoThrow)
+				{
+					std::cerr << seconds_frac_error;
+					return{};
+				}
+				else throw parsing_error{ seconds_frac_error };
 			}
 		}
 
 		return out;
 	}
 
-	static std::optional<local_date_time> fill_date_time(const reg_matches& matches) noexcept
+	template<bool NoThrow>
+	static std::optional<local_date_time> fill_date_time(const reg_matches& matches) noexcept(NoThrow)
 	{
-		const auto date = fill_date(matches);
-		const auto time = fill_time(matches);
+		const auto date = fill_date<NoThrow>(matches);
+		const auto time = fill_time<NoThrow>(matches);
 
 		if (!date || !time)
 			return {};
@@ -217,7 +358,8 @@ namespace another_toml
 		return local_date_time{ *date, *time };
 	}
 
-	std::variant<std::monostate, date, time, date_time, local_date_time> parse_date_time(std::string_view str) noexcept
+	template<bool NoThrow>
+	std::variant<std::monostate, date, time, date_time, local_date_time> parse_date_time_ex(std::string_view str) noexcept(NoThrow)
 	{
 		constexpr auto date_time_reg =
 			R"(^((\d{4})-(\d{2})-(\d{2}))?([Tt ])?((\d{2}):(\d{2}):(\d{2})(\.\d+)?)?(([zZ])|(([\+\-])(\d{2}):(\d{2})))?)";
@@ -251,7 +393,7 @@ namespace another_toml
 
 			if (offset_date_time)
 			{
-				const auto dt = fill_date_time(matches);
+				const auto dt = fill_date_time<NoThrow>(matches);
 				if (dt)
 				{
 					auto odt = date_time{ *dt, false };
@@ -269,43 +411,101 @@ namespace another_toml
 					assert(off_sign.matched);
 					if (*off_sign.first == '+')
 						odt.offset_positive = true;
-					else if (*off_sign.first != '-')
-						return {};
 
 					const auto& hours = matches[static_cast<std::size_t>(match_index::off_hours)];
 					assert(hours.matched);
 					auto ret = std::from_chars(&*hours.first, &*hours.second, odt.offset_hours);
+					
+					constexpr auto hours_range = "Offset hours out of range.\n";
+
+					if (ret.ptr == &*hours.first && ret.ec == std::errc::result_out_of_range)
+					{
+						if constexpr (NoThrow)
+						{
+							std::cerr << hours_range;
+							return {};
+						}
+						else throw parsing_error{ hours_range };
+					}
+
 					if (ret.ptr == &*hours.second)
 					{
+						if (odt.offset_hours > 23)
+						{
+							if constexpr (NoThrow)
+							{
+								std::cerr << hours_range;
+								return {};
+							}
+							else throw parsing_error{ hours_range };
+						}
+
 						const auto& minutes = matches[static_cast<std::size_t>(match_index::off_minues)];
 						assert(minutes.matched);
 						ret = std::from_chars(&*minutes.first, &*minutes.first + minutes.length(), odt.offset_minutes);
+						
+						constexpr auto minutes_range = "Offset minutes out of range.\n";
+						
+						if (ret.ptr == &*minutes.first && ret.ec == std::errc::result_out_of_range)
+						{
+							if constexpr (NoThrow)
+							{
+								std::cerr << minutes_range;
+								return {};
+							}
+							else throw parsing_error{ minutes_range };
+						}
+
 						if (ret.ptr == &*minutes.first + minutes.length())
-							return odt;
+						{
+							if (minutes < 60)
+								return odt;
+							else
+							{
+								if constexpr (NoThrow)
+								{
+									std::cerr << minutes_range;
+									return {};
+								}
+								else throw parsing_error{ minutes_range };
+							}
+						}
 					}
 				}
 			}
 			else if (local_date_time)
 			{
-				auto dt = fill_date_time(matches);
+				auto dt = fill_date_time<NoThrow>(matches);
 				if (dt)
 					return *dt;
 			}
 			else if (local_date)
 			{
-				auto d = fill_date(matches);
+				auto d = fill_date<NoThrow>(matches);
 				if (d)
 					return *d;
 			}
 			else if (local_time)
 			{
-				auto t = fill_time(matches);
+				auto t = fill_time<NoThrow>(matches);
 				if (t)
 					return *t;
 			}
 		}
 
-		return {};
+		if constexpr (NoThrow)
+		{
+			return {};
+		}
+		else 
+			throw parsing_error{ "Error parsing value.\n"s };
+	}
+
+	template std::variant<std::monostate, date, time, date_time, local_date_time> parse_date_time_ex<false>(std::string_view str);
+
+	std::variant<std::monostate, date, time, date_time, local_date_time> parse_date_time(std::string_view str) noexcept
+	{
+		return parse_date_time_ex<true>(str);
 	}
 
 	// removes underscores and leading positive signs from sv
@@ -356,6 +556,7 @@ namespace another_toml
 			else if (ret.ec == std::errc::result_out_of_range)
 				return parse_float_string_return{ {}, {}, error_t::out_of_range };
 		}
+
 		return parse_float_string_return{ {}, {}, error_t::bad };
 	}
 

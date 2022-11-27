@@ -59,6 +59,13 @@ namespace another_toml
 		using toml_error::toml_error;
 	};
 
+	//thrown when an element couldn't be parsed
+	class parsing_error :public toml_error
+	{
+	public:
+		using toml_error::toml_error;
+	};
+
 	//thrown if the toml file contains duplicate table or key declarations
 	class duplicate_element : public toml_error
 	{

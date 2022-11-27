@@ -38,7 +38,7 @@ namespace another_toml
 	// Simple time type.
 	struct time
 	{
-		std::int8_t hours = {},
+		std::uint8_t hours = {},
 			minutes = {},
 			seconds = {};
 		float seconds_frac = {};
