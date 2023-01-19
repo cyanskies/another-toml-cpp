@@ -3345,7 +3345,24 @@ namespace another_toml
 			
 			if (ch == ',')
 			{
-				assert(strm.token_stream.back() == token_type::value);
+				if (strm.token_stream.back() != token_type::value)
+				{
+					if constexpr (NoThrow)
+					{
+						std::cerr << "Unexpected comma in array element.\n";
+						print_error_string(strm, strm.col, error_entire_line, std::cerr);
+						return false;
+					}
+					else
+					{
+						auto str = std::ostringstream{};
+						const auto line = strm.line, col = strm.col;
+						str << "Unexpected comma in array element.\n";
+						print_error_string(strm, col - 1, col, str);
+						throw unexpected_character{ str.str(), strm.line, strm.col};
+					}
+				}
+
 				strm.token_stream.emplace_back(token_type::comma);
 				continue;
 			}
