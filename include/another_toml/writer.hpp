@@ -54,8 +54,8 @@ namespace another_toml
 		// Date Time separator.
 		enum class date_time_separator_t : std::uint8_t
 		{
-			big_t,
-			whitespace
+			big_t, // 1979-05-27T07:32:00Z
+			whitespace // 1979-05-27 07:32:00Z
 		};
 
 		// Default to big_t.
@@ -73,7 +73,7 @@ namespace another_toml
 	public:
 		writer();
 
-		// note their is an implicit root table
+		// NOTE: there is an implicit root table
 		// you cannot end_table to end it
 		// you can write values and arrays into it, before adding
 		// other tables
@@ -187,7 +187,7 @@ namespace another_toml
 		template<typename Integral,
 			std::enable_if_t<detail::is_integral_v<Integral>, int> = 0>
 		void write(std::string_view key, std::initializer_list<Integral> value, int_base);
-		// initializer_list Integral options support
+		// initializer_list Float options support
 		template<typename Floating,
 			std::enable_if_t<std::is_convertible_v<Floating, double>, int> = 0>
 		void write(std::string_view key, std::initializer_list<Floating> value,
@@ -195,7 +195,7 @@ namespace another_toml
 
 		void set_options(writer_options o)
 		{
-			_opts = o;
+			_opts = std::move(o);
 		}
 
 		std::string to_string() const;
