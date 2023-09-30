@@ -2310,6 +2310,8 @@ namespace another_toml
 	extern template std::optional<std::string> replace_escape_chars<true>(std::string_view);
 	extern template std::optional<std::string> replace_escape_chars<false>(std::string_view);
 
+	// Replace control chars with the unicode replacement char
+	// 's' is a string_view containing a grapheme
 	std::string_view block_control(std::string_view s) noexcept
 	{
 		if (empty(s) || s[0] < 0x20)

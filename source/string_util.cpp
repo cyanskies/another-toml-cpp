@@ -841,11 +841,6 @@ namespace another_toml
 		return *replace_escape_chars<false>(str);
 	}
 
-	std::string to_literal_multiline(std::string_view str)
-	{
-		return *to_escaped_string<false, false, false>(str);
-	}
-
 	std::string to_escaped_multiline(std::string_view str)
 	{
 		return *to_escaped_string<false, false, false>(str);
@@ -894,118 +889,6 @@ namespace another_toml
 	bool contains_unicode(std::string_view s) noexcept
 	{
 		return std::any_of(begin(s), end(s), is_unicode_byte);
-	}
-
-	bool valid_unicode_string(std::string_view s) noexcept
-	{
-		const auto end = std::end(s);
-		for (auto beg = begin(s); beg != end; ++beg)
-		{
-			if (is_unicode_start(*beg))
-			{
-				auto u8 = std::string{ *beg };
-				while (++beg != end && is_unicode_continuation(*beg))
-					u8.push_back(*beg);
-
-				const auto ch = unicode_u8_to_u32(u8);
-				if (!valid_u32_code_point(ch))
-					return false;
-			}
-			else if (is_unicode_continuation(*beg)) // Misplaced continuation byte
-				return false;
-			else if (!valid_u32_code_point(static_cast<char32_t>(*beg))) // Ascii
-				return false;
-		}
-
-		return true;
-	}
-
-	char32_t unicode_u8_to_u32(std::string_view str) noexcept
-	{
-		if (empty(str))
-			return {};
-
-		const auto end = std::end(str);
-		auto beg = begin(str);
-
-		if (!is_unicode_start(*beg))
-			return unicode_error_char;
-
-		int bytes = 1;
-		if (*beg & 0b01000000)
-		{
-			++bytes;
-			if (*beg & 0b00100000)
-			{
-				++bytes;
-				if (*beg & 0b00010000)
-					++bytes;
-			}
-		}
-
-		assert(bytes >= 1);
-		auto out = char32_t{};
-		switch (bytes)
-		{
-		case 2:
-			out = *beg & 0b00011111;
-			break;
-		case 3:
-			out = *beg & 0b00001111;
-			break;
-		case 4:
-			out = *beg & 0b00000111;
-			break;
-		}
-
-		while (bytes-- > 1)
-		{
-			++beg;
-			if (beg == end || !is_unicode_continuation(*beg))
-				return unicode_error_char;
-			out = out << 6;
-			out |= *beg & 0b00111111;
-		}
-
-		if (valid_u32_code_point(out))
-			return out;
-
-		return unicode_error_char;
-	}
-
-	std::basic_string<char> to_code_units(char32_t ch)
-	{
-		auto out = std::basic_string<char>{};
-		if (ch < 0x80)
-			return { static_cast<char>(ch) };
-		else if (ch < 0x800)
-		{
-			return {
-				static_cast<char>((ch >> 6) | 0b11000000),
-				static_cast<char>((ch & 0b00111111) | 0b10000000)
-			};
-		}
-		else if (ch < 0x10000)
-		{
-			return {
-				static_cast<char>((ch >> 12) | 0b11100000),
-				static_cast<char>(((ch >> 6) & 0b00111111) | 0b10000000),
-				static_cast<char>((ch & 0b00111111) | 0b10000000)
-			};
-		}
-		else if (ch < 0x10FFFF)
-		{
-			return {
-				static_cast<char>((ch >> 18) | 0b11110000),
-				static_cast<char>(((ch >> 12) & 0b00111111) | 0b10000000),
-				static_cast<char>(((ch >> 6) & 0b00111111) | 0b10000000),
-				static_cast<char>((ch & 0b00111111) | 0b10000000)
-			};
-		}
-		else
-		{
-			return {};
-		}
 	}
 
 	std::string unicode_u32_to_u8(char32_t ch)
