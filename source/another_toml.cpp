@@ -268,9 +268,9 @@ namespace another_toml
 
 		if (!table() && !inline_table())
 			throw wrong_node_type{ "Cannot call find_child on this type of node"s };
-
+		
 		auto child = get_first_child();
-		while (child.good() && child.as_string() != name)
+		while (child.good() && !unicode_string_equal(child.as_string(), name))
 			child = child.get_next_sibling();
 
 		if (!child.good())
@@ -289,7 +289,7 @@ namespace another_toml
 			return basic_node<>{};
 
 		auto child = get_first_child();
-		while (child.good() && child.as_string() != name)
+		while (child.good() && !unicode_string_equal(child.as_string(), name))
 			child = child.get_next_sibling();
 
 		if (child.key())
@@ -3573,6 +3573,7 @@ namespace another_toml
 		if (toml_data.nodes[key_str.parent].closed == false)
 			strm.open_tables.emplace_back(key_str.parent);
 
+		// NOTE: key_str.name has already been checked by this point
 		auto key = detail::internal_node{ std::move(*key_str.name), node_type::key };
 		try
 		{

@@ -265,7 +265,7 @@ auto case_temp_value = root_node["database"]["temp_targets"]["case"];
 ```
 
 `find_child(std::string_view)` throws `node_not_found` if the child node cannot be found,
-this is so that calls to `find_child` report error while they are chained together as above.
+this enables calls to `find_child` to report errors while they are chained together as above.
 
 You can pass `toml::no_throw` to instead return a bad node on failure.
 
@@ -649,7 +649,7 @@ line_length_short = [
 Set `writer_options::compact_spacing`.
 
 If enabled the writer will skip any optional whitespace, can be used
-to reduce document size at the cost of readability(doesn''t effect array line splitting).
+to reduce document size at the cost of readability(doesn't effect array line splitting).
 
 ```toml
 compact_spacing_off = [ 1, 2, 3 ]
@@ -659,7 +659,7 @@ compact_spacing_on=[1,2,3]
 ##### Indent Child Tables
 Set `writer_options::indent_child_tables`.
 
-If enabled adds an indentation of each layer of child table, the indentation is a single tab('\t') character by default.
+If enabled then an indentation will be added for each layer of child table, the indentation is a single tab('\t') character by default.
 
 ```toml
 [a]
