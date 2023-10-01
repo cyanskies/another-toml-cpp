@@ -87,6 +87,7 @@ namespace another_toml
 		inline_table,
 		value,
 		table,
+		root_table,
 		end
 	};
 
@@ -94,6 +95,7 @@ namespace another_toml
 	{
 		dotted,
 		header,
+		array, // internal only: denotes an element in an array table
 		end
 	};
 

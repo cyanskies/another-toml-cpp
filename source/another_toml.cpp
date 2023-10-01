@@ -96,7 +96,7 @@ namespace another_toml
 
 		struct toml_internal_data
 		{
-			std::vector<internal_node> nodes = { internal_node{{}, node_type::table} };
+			std::vector<internal_node> nodes = { internal_node{ {}, node_type::root_table } };
 #ifndef NDEBUG
 			std::string input_log;
 #endif
@@ -132,6 +132,8 @@ namespace another_toml
 			return "value"s;
 		case node_type::table:
 			return "table"s;
+		case node_type::root_table:
+			return "root table"s;
 		}
 
 		return "error type"s;
@@ -151,7 +153,11 @@ namespace another_toml
 	template<bool R>
 	bool basic_node<R>::table() const noexcept
 	{
-		return good() && node_type::table == _data->nodes[_index].type;
+		if (!good())
+			return false;
+
+		const auto type = _data->nodes[_index].type;
+		return type == node_type::table || type == node_type::root_table;
 	}
 
 	template<bool R>
@@ -662,10 +668,11 @@ namespace another_toml
 
 	void writer::begin_table(std::string_view table_name, table_def_type table_type)
 	{
-		assert(table_type != table_def_type::end);
+		assert(table_type < table_def_type::array);
 		auto i = _stack.back();
 		const auto t = _data->nodes[i].type;
 		assert(t == node_type::table ||
+			t == node_type::root_table ||
 			t == node_type::inline_table ||
 			t == node_type::array ||
 			t == node_type::array_tables);
@@ -691,6 +698,7 @@ namespace another_toml
 		auto i = _stack.back();
 		const auto t = _data->nodes[i].type;
 		assert(t == node_type::table ||
+			t == node_type::root_table ||
 			t == node_type::inline_table ||
 			t == node_type::array);
 
@@ -714,6 +722,7 @@ namespace another_toml
 		auto i = _stack.back();
 		const auto t = _data->nodes[i].type;
 		assert(t == node_type::table ||
+			t == node_type::root_table ||
 			t == node_type::array ||
 			t == node_type::inline_table);
 
@@ -737,6 +746,7 @@ namespace another_toml
 		auto i = _stack.back();
 		const auto t = _data->nodes[i].type;
 		assert(t == node_type::table ||
+			t == node_type::root_table ||
 			t == node_type::array_tables);
 
 		auto new_table = insert_child_table_array<false>(i, std::string{ name }, *_data);
@@ -759,6 +769,7 @@ namespace another_toml
 		auto i = _stack.back();
 		const auto t = _data->nodes[i].type;
 		assert(t == node_type::table ||
+			t == node_type::root_table ||
 			t == node_type::inline_table);
 
 		auto new_table = insert_child<false>(*_data, i, internal_node{ std::string{ name }, node_type::key });
@@ -901,8 +912,7 @@ namespace another_toml
 		{
 			const auto& c_ref = d.nodes[child];
 			
-			if (node_type::value != c_ref.type &&
-				!empty(c_ref.name))
+			if (node_type::value != c_ref.type)
 				return true;
 
 			child = c_ref.next;
@@ -922,10 +932,11 @@ namespace another_toml
 		const auto end = std::end(nodes);
 		for (beg; beg != end; ++beg)
 		{
-			if (empty(d.nodes[*beg].name))
+			const auto& node = d.nodes[*beg];
+			if (node.type == node_type::root_table || node.table_type == table_def_type::array)
 				continue;
 
-			out += escape_toml_name(d.nodes[*beg].name, o.ascii_output);
+			out += escape_toml_name(node.name, o.ascii_output);
 			if (next(beg) != end)
 				out.push_back('.');
 		}
@@ -1254,14 +1265,19 @@ namespace another_toml
 			const auto& c_ref = d.nodes[*beg];
 			switch (c_ref.type)
 			{
+			case node_type::root_table:
+				[[fallthrough]];
 			case node_type::table:
 			{
 				assert(parent_type == node_type::table ||
+					parent_type == node_type::root_table ||
 					parent_type == node_type::array_tables);
 
 				auto name_stack = stack;
 				name_stack.emplace_back(*beg);
 
+				auto indent = indent_level;
+				
 				if (parent_type != node_type::array_tables && 
 					(is_headered_table(*beg, d) || c_ref.child == bad_index))
 				{
@@ -1281,17 +1297,20 @@ namespace another_toml
 						last_newline_dist = {};
 					}
 
-					optional_indentation(strm, indent_level + 1, o, last_newline_dist);
+					indent += 1;
+
+					optional_indentation(strm, indent, o, last_newline_dist);
 
 					strm << '[' << make_table_name(name_stack, d, o) << "]\n"s;
 					last_newline_dist = {};
 				}
 
-				write_children<false>(strm, d, o, std::move(name_stack), last_newline_dist, indent_level + 1);
+				write_children<false>(strm, d, o, std::move(name_stack), last_newline_dist, indent);
 			} break;
 			case node_type::array:
 			{
 				assert(parent_type == node_type::table ||
+					parent_type == node_type::root_table ||
 					parent_type == node_type::inline_table ||
 					parent_type == node_type::array);
 
@@ -1327,7 +1346,7 @@ namespace another_toml
 
 				strm << ']';
 				++last_newline_dist;
-				if (parent_type == node_type::table)
+				if (parent_type == node_type::table || parent_type == node_type::root_table)
 				{
 					strm << '\n';
 					last_newline_dist = {};
@@ -1382,6 +1401,7 @@ namespace another_toml
 			case node_type::key:
 			{
 				assert(parent_type == node_type::table ||
+					parent_type == node_type::root_table ||
 					parent_type == node_type::inline_table);
 
 				optional_indentation(strm, indent_level, o, last_newline_dist);
@@ -1759,7 +1779,8 @@ namespace another_toml
 		{
 			for (auto t : open_tables)
 			{
-				assert(toml_data.nodes[t].type == node_type::table);
+				assert(toml_data.nodes[t].type == node_type::table ||
+					toml_data.nodes[t].type == node_type::root_table);
 				toml_data.nodes[t].closed = true;
 			}
 			open_tables.clear();
@@ -2057,7 +2078,7 @@ namespace another_toml
 		assert(node.type == node_type::array_tables);
 
 		// insert array member
-		auto ret = insert_child_table<NoThrow>(parent, {}, d, table_def_type::header);		
+		auto ret = insert_child_table<NoThrow>(parent, {}, d, table_def_type::array);		
 		if constexpr (NoThrow)
 		{
 			if (ret == bad_index)
@@ -3702,6 +3723,7 @@ namespace another_toml
 	static index_t parse_table_header(parser_state& strm, toml_internal_data& toml_data)
 	{
 		assert(toml_data.nodes[strm.stack.back()].type == node_type::table ||
+			toml_data.nodes[strm.stack.back()].type == node_type::root_table ||
 			toml_data.nodes[strm.stack.back()].type == node_type::array_tables);
 		strm.stack.pop_back();
 		strm.close_tables(toml_data);
