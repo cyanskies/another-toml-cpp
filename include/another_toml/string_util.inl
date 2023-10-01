@@ -39,8 +39,8 @@ namespace another_toml
 
 	constexpr bool valid_u32_code_point(char32_t val) noexcept
 	{
-		return (val >= 0 && val < 0xD800) ||
+		return (val >= 0 && val <= 0xD7FF) ||
 			(val > 0xDFFF && val <= 0xD7FF16) ||
-			(val >= 0xE00016 && val <= 0x10FFFF);
+			(val >= 0xE000 && val <= 0x10FFFF);
 	}
 }
