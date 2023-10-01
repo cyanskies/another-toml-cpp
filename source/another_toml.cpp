@@ -398,6 +398,8 @@ namespace another_toml
 			else if (d.rep == float_rep::fixed &&
 				!options.simple_numerical_output)
 				strm << std::fixed;
+			else // d.rep == default || simple_numerical_output enabled
+				strm << std::defaultfloat;
 
 			if (d.precision > auto_precision)
 				strm << std::setprecision(d.precision);
