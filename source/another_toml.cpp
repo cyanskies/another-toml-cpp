@@ -2841,35 +2841,32 @@ namespace another_toml
 					strm.putback(ch);
 					break;
 				}
+			}
 
-				if constexpr (inline_table)
+			if constexpr (array)
+			{
+				if (ch == ']')
 				{
-					if (ch == '}')
-					{
-						strm.putback(ch);
-						break;
-					}
+					strm.putback(ch);
+					break;
 				}
+			}
 
-				if constexpr (array)
+			if constexpr (inline_table)
+			{
+				if (ch == '}')
 				{
-					if (ch == ']')
-					{
-						strm.putback(ch);
-						break;
-					}
+					strm.putback(ch);
+					break;
 				}
 
 				if (newline(strm, ch))
 				{
 					const auto write_error = [&strm, ch_index](std::ostream& o) {
-						if constexpr (std::is_same_v<Tag, array_tag_t>)
-							o << "Unexpected newline in array element.\n"s;
-						else
-							o << "Unexpected newline in inline table value.\n"s;
+						o << "Unexpected newline in inline table value.\n"s;
 						print_error_string(strm, strm.col, strm.col, o);
 						return;
-					};
+						};
 
 					if constexpr (NoThrow)
 					{
@@ -2952,7 +2949,6 @@ namespace another_toml
 				}
 			}
 
-			strm.token_stream.push_back(token_type::value);
 			return insert_child<NoThrow>(toml_data, parent, 
 				internal_node{
 					std::move(string), node_type::value,
