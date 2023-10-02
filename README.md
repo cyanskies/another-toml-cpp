@@ -86,7 +86,7 @@ auto root_table = toml::parse(path);
 ```
 
 Parser functions will throw `another_toml::toml_error`
-You can also catch the more specific exception sub-types defined in another_toml.hpp
+You can also catch the more specific exception sub-types defined in another_toml/except.hpp
 
 You can pass `another_toml::no_throw` to request the parser not to throw exceptions.
 The parser may still throw standard library exceptions related to memory alloc or 
