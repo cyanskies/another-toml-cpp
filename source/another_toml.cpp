@@ -2326,8 +2326,8 @@ namespace another_toml
 		return out;
 	}
 
-	// Defined in another_toml_string_util.cpp
-	template<bool NoThrow>
+	// Defined in another_toml/string_util.cpp
+	template<bool NoThrow, bool SurrogatePairs = false>
 	std::optional<std::string> replace_escape_chars(std::string_view);
 
 	extern template std::optional<std::string> replace_escape_chars<true>(std::string_view);
