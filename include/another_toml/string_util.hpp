@@ -105,7 +105,7 @@ namespace another_toml
 	constexpr bool is_unicode_continuation(char) noexcept;
 
 	// Returns true if `val` is a valid code point
-	constexpr bool valid_u32_code_point(char32_t val) noexcept;
+	bool valid_u32_code_point(char32_t val) noexcept;
 }
 
 #include "another_toml/string_util.inl"

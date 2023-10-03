@@ -20,17 +20,11 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Deprecated but not marked for removal
-// This is the easiest way for us to convert unicode escape codes
-// We dont use the functionallity that was considered a vulnerability AFAIK
-#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
-
 #include "another_toml/string_util.hpp"
 
 #include <algorithm>
 #include <array>
 #include <charconv>
-#include <codecvt>
 #include <iostream>
 #include <locale>
 #include <optional>
@@ -570,9 +564,7 @@ namespace another_toml
 	template<bool NoThrow, bool EscapeAllUnicode, bool EscapeNewline>
 	static std::optional<std::string> to_escaped_string(std::string_view unicode)
 	{
-		auto cvt = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{ {}, unicode32_bad_conversion };
-		const auto u32 = cvt.from_bytes(data(unicode), data(unicode) + size(unicode));
-		if (u32 == unicode32_bad_conversion)
+		if (!uni::is_valid_utf8(unicode))
 		{
 			if constexpr (NoThrow)
 			{
@@ -583,6 +575,7 @@ namespace another_toml
 				throw toml_error{ "Invalid utf-8 string"s };
 		}
 
+		const auto u32 = uni::utf8to32u(unicode);
 		auto out = std::string{};
 		const auto end = std::end(u32);
 		for (auto ch : u32)
@@ -647,7 +640,7 @@ namespace another_toml
 			}
 			else if (ch > 0x7F) // check for unicode chars
 			{
-				const auto u8 = cvt.to_bytes(ch);
+				const auto u8 = uni::utf32to8(std::u32string_view{ &ch, 1 });
 				out += u8;
 			}
 			else
@@ -701,8 +694,8 @@ namespace another_toml
 	std::optional<std::string> replace_escape_chars(std::string_view str)
 	{
 		/*static_assert(size(escape_codes_raw) == size(escape_codes_char));
-		constexpr auto codes_size = size(escape_codes_raw);
-		*/auto s = std::string{ str };
+		constexpr auto codes_size = size(escape_codes_raw);*/
+		auto s = std::string{ str };
 		auto pos = std::size_t{};
 		while (pos < size(s))
 		{
@@ -904,5 +897,10 @@ namespace another_toml
 	std::u32string unicode8_to_unicode32(std::string_view unicode)
 	{
 		return uni::utf8to32u(unicode);
+	}
+
+	bool valid_u32_code_point(char32_t val) noexcept
+	{
+		return uni::is_valid_utf32(std::u32string_view{ &val, 1 });
 	}
 }

@@ -36,7 +36,7 @@ namespace another_toml
 	void writer::write(std::string_view key, T&& value)
 	{
 		using Ty = std::decay_t<T>;
-		if constexpr (detail::is_range_v<Ty>)
+		if constexpr (detail::is_range_v<Ty> && !std::is_convertible_v<T, std::string_view>)
 		{
 			begin_array(key);
 			for (auto&& v : std::forward<T>(value))
