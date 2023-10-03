@@ -613,7 +613,7 @@ namespace another_toml
 			bool escape = ch < 0x20; // control chars
 
 			if constexpr (EscapeAllUnicode)
-				escape = ch > 0x7F; // non-ascii unicode
+				escape = escape || ch > 0x7F; // non-ascii unicode
 
 			if (escape)
 			{
@@ -623,6 +623,8 @@ namespace another_toml
 				assert(ret.ec == std::errc{});
 				const auto dist = ret.ptr - chars.data();
 				auto pad_limit = 8;
+				// TODO: TOML 1.1
+				// output \xHH unicode escapes
 				if (dist > 3)
 					out += "\\U"s;
 				else
@@ -863,11 +865,6 @@ namespace another_toml
 		return *to_escaped_string<false, true, false>(str);
 	}
 
-	std::string unicode_normalise(std::string_view str)
-	{
-		return uni::norm::to_nfc_utf8(str);
-	}
-	
 	// based on uni_algo/examples/cpp_ranges.h
 	bool unicode_string_equal(std::string_view lhs, std::string_view rhs)
 	{
@@ -890,12 +887,6 @@ namespace another_toml
 			return true;
 
 		return false;
-	}
-
-	std::size_t unicode_count_graphemes(std::string_view str)
-	{
-		auto view = uni::ranges::grapheme::utf8_view{ str };
-		return distance(begin(view), end(view));
 	}
 
 	bool contains_unicode(std::string_view s) noexcept

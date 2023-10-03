@@ -81,12 +81,10 @@ namespace another_toml
 	std::string escape_toml_name(std::string_view str, bool ascii_ouput = false);
 
 	bool unicode_string_equal(std::string_view lhs, std::string_view rhs);
-	std::size_t unicode_count_graphemes(std::string_view);
-
+	
 	// returns true if string contains any unicode code units
 	bool contains_unicode(std::string_view s) noexcept;
 	
-	constexpr auto unicode_error_char = char32_t{ 0x110000 };
 	// Converts ch to a utf-8 encoded string representing char
 	std::string unicode_u32_to_u8(char32_t ch);
 
@@ -98,16 +96,13 @@ namespace another_toml
 	std::u32string unicode8_to_unicode32(std::string_view str);
 
 	// Tests if the char is a unicode code unit
-	constexpr bool is_unicode_byte(char) noexcept;
-	// Tests if the char is the start of a unicode code point
-	constexpr bool is_unicode_start(char) noexcept;
-	// Tests if the char is part of a code point, but wasn't the start
-	constexpr bool is_unicode_continuation(char) noexcept;
+	constexpr bool is_unicode_byte(char c) noexcept
+	{
+		return c & 0b10000000;
+	}
 
 	// Returns true if `val` is a valid code point
 	bool valid_u32_code_point(char32_t val) noexcept;
 }
-
-#include "another_toml/string_util.inl"
 
 #endif // !ANOTHER_TOML_STRING_UTIL_HPP

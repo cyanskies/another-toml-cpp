@@ -1166,7 +1166,7 @@ namespace another_toml
 		{
 			if (type == string_out_type::default)
 				type = string_out_type::multiline;
-			if (type == string_out_type::literal ||
+			else if (type == string_out_type::literal ||
 				type == string_out_type::literal_multiline_one_line)
 				type = string_out_type::literal_multiline;
 		}
@@ -2091,6 +2091,20 @@ namespace another_toml
 		}
 		return ret;
 	}
+
+	// Tests if the char is the start of a unicode code point
+ 	constexpr bool is_unicode_start(char c) noexcept
+	{
+		return c & 0x80 && c & 0x40;
+	}
+
+	// Tests if the char is part of a code point, but wasn't the start
+	constexpr bool is_unicode_continuation(char c) noexcept
+	{
+		return c & 0x80 && !(c & 0x40);
+	}
+
+	constexpr auto unicode_error_char = char32_t{ 0x110000 };
 
 	// variant of unicode_u8_to_u32 that reads from parser_state
 	static char32_t parse_unicode_char(char c, parser_state& strm) noexcept

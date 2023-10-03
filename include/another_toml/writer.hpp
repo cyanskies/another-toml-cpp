@@ -62,7 +62,7 @@ namespace another_toml
 		date_time_separator_t date_time_separator = {};
 
 		// Ignore per value override specifiers where possible.
-		// (eg. all ints output in base 10, floats in normal mode rather than scientific)
+		// (eg. all ints output in base 10, floats in default mode rather than fixed or scientific)
 		bool simple_numerical_output = false;
 		// Write a utf-8 BOM into the start of the stream.
 		bool utf8_bom = false;

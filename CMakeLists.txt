@@ -27,7 +27,6 @@ target_sources(${PROJECT_NAME}
 	./include/another_toml/node.inl
 	./include/another_toml/parser.hpp
 	./include/another_toml/string_util.hpp
-	./include/another_toml/string_util.inl
 	./include/another_toml/types.hpp
 	./include/another_toml/writer.hpp
 	./include/another_toml/writer.inl
