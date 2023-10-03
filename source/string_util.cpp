@@ -678,23 +678,13 @@ namespace another_toml
 		return out;
 	}
 
-	//constexpr auto escape_codes_raw = std::array{
-	//	"\\b"sv, "\\t"sv, "\\n"sv, "\\f"sv, "\\r"sv, "\\\""sv, "\\\\"sv // "\\uXXXX" "\\UXXXXXXXX"
-	//};
-
-	//constexpr auto escape_codes_char = std::array{
-	//	'\b', '\t', '\n', '\f', '\r', '\"', '\\' // "\\uXXXX" "\\UXXXXXXXX"
-	//};
-
 	// defined in another_toml.cpp
 	std::string_view block_control(std::string_view s) noexcept;
 
 	// replace string chars with proper escape codes
-	template<bool NoThrow>
+	template<bool NoThrow, bool Pairs = false>
 	std::optional<std::string> replace_escape_chars(std::string_view str)
 	{
-		/*static_assert(size(escape_codes_raw) == size(escape_codes_char));
-		constexpr auto codes_size = size(escape_codes_raw);*/
 		auto s = std::string{ str };
 		auto pos = std::size_t{};
 		while (pos < size(s))
@@ -716,8 +706,7 @@ namespace another_toml
 			}
 
 			auto code_end = code_mid + 1;
-			auto found_code = false;
-
+			
 			switch (s[code_mid])
 			{
 			case 'b':
@@ -740,7 +729,7 @@ namespace another_toml
 				s.replace(code_beg, 2, 1, '\"');
 				pos = code_beg + 1;
 				continue;
-			case U'\\':
+			case '\\':
 				s.replace(code_beg, 2, 1, '\\');
 				pos = code_beg + 1;
 				continue;
@@ -748,79 +737,101 @@ namespace another_toml
 				s.replace(code_beg, 2, 1, '\t');
 				pos = code_beg + 1;
 				continue;
+			case 'u': // unicode \uHHHH
+				code_end = code_mid + 5;
+				break;
+			case 'U': // unicode \UHHHHHHHH
+				code_end = code_mid + 9;
+				break;
+			// TODO: TOML 1.1
+			//case 'x': // unicode \xHH
+			//	code_end = code_mid + 3;
+			//	break;
+			default:
+			{
+				const auto write_error = [str, code_mid](std::ostream& o) {
+					const auto string = std::string_view{ &str[code_mid] };
+					auto graph_rng = uni::ranges::grapheme::utf8_view{ string };
+					o << "Illigal escape code in quoted string: \"\\"s <<
+						block_control(*begin(graph_rng)) <<
+						"\".\n"s;
+					};
+
+				if constexpr (NoThrow)
+				{
+					write_error(std::cerr);
+					return {};
+				}
+				else
+				{
+					auto string = std::ostringstream{};
+					write_error(string);
+					throw unicode_error{ string.str() };
+				}
+			}
 			}
 
 			// Unicode chars are 1-4 bytes, the escape code is at least 6 chars
 			// so the resulting string will always be shorter, string won't have
 			// to alloc.
-			if (const auto escape_char = s[code_mid];
-				escape_char == 'u' || escape_char == 'U')
+			const auto escape_size = code_end - code_beg;
+
+			if (size(s) < code_end)
 			{
-				if (escape_char == 'u') // \uHHHH
-					code_end = code_mid + 5;
-				else if (escape_char == 'U') // \UHHHHHHHH
-					code_end = code_mid + 9;
-				// TOML 1.1
-				//else if (escape_char == 'x') // \xHH
-				//	code_end = code_mid + 3;
-
-				const auto escape_size = code_end - code_beg;
-
-				if (size(s) < code_end)
+				if constexpr (NoThrow)
 				{
-					if constexpr (NoThrow)
-					{
-						std::cerr << "Invalid unicode escape code: "s << std::string_view{ &s[code_beg], escape_size } << '\n';
-						return {};
-					}
-					else
-						throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], escape_size} };
+					std::cerr << "Invalid unicode escape code: "s << std::string_view{ &s[code_beg], escape_size } << '\n';
+					return {};
 				}
+				else
+					throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], escape_size} };
+			}
 
-				auto int_val = std::uint_least32_t{};
-				const auto result = std::from_chars(&s[code_mid + 1], &s[code_end], int_val, 16);
-				static_assert(sizeof(std::uint_least32_t) <= sizeof(char32_t));
-				const auto unicode_char = static_cast<char32_t>(int_val);
-				if (result.ptr != &s[code_end] ||
-					result.ec == std::errc::result_out_of_range ||
-					!valid_u32_code_point(unicode_char))
+			auto int_val = std::uint_least32_t{};
+			const auto result = std::from_chars(&s[code_mid + 1], &s[code_end], int_val, 16);
+			static_assert(sizeof(std::uint_least32_t) <= sizeof(char32_t));
+				
+			// parse surragate pairs
+			if constexpr (Pairs)
+			{
+				if (int_val >= 0xD800 && int_val <= 0xDFFF)
 				{
-					if constexpr (NoThrow)
+					auto str = std::u16string{ { static_cast<char16_t>(int_val), {} } };
+					if (code_end + 5 < size(s) && 
+						s[code_end] == '\\' &&
+						s[code_end+1] == 'u')
 					{
-						std::cerr << "Invalid unicode escape code: "s << std::string_view{ &s[code_beg], escape_size } << '\n';
-						return {};
+						//second part of JSON surrogate pair
+						std::from_chars(&s[code_end + 2], &s[code_end + 6], int_val, 16);
+						str[1] = static_cast<char16_t>(int_val);
+						if (uni::is_valid_utf16(str))
+						{
+							const auto u8 = uni::utf16to8(str);
+							s.replace(code_beg, escape_size * 2, u8);
+							pos = code_beg + size(u8);
+							continue;
+						}
 					}
-					else
-						throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], escape_size} };
 				}
-
-				const auto u8 = unicode_u32_to_u8(unicode_char);
-				s.replace(code_beg, escape_size, u8);
-				pos = code_beg + size(u8);
-				continue;
 			}
 
-			const auto write_error = [str, code_mid](std::ostream& o) {
-				const auto string = std::string_view{ &str[code_mid] };
-				auto graph_rng = uni::ranges::grapheme::utf8_view{ string };
-				o << "Illigal escape code in quoted string: \"\\"s <<
-					block_control(*begin(graph_rng)) <<
-					"\".\n"s;
-			};
-
-			if constexpr (NoThrow)
+			const auto unicode_char = static_cast<char32_t>(int_val);
+			if (result.ptr != &s[code_end] ||
+				result.ec == std::errc::result_out_of_range ||
+				!valid_u32_code_point(unicode_char))
 			{
-				write_error(std::cerr);
-				return {};
-			}
-			else
-			{
-				auto string = std::ostringstream{};
-				write_error(string);
-				throw unicode_error{ string.str() };
+				if constexpr (NoThrow)
+				{
+					std::cerr << "Invalid unicode escape code: "s << std::string_view{ &s[code_beg], escape_size } << '\n';
+					return {};
+				}
+				else
+					throw unicode_error{ "Invalid unicode escape code: "s + std::string{ &s[code_beg], escape_size} };
 			}
 
-			++pos;
+			const auto u8 = unicode_u32_to_u8(unicode_char);
+			s.replace(code_beg, escape_size, u8);
+			pos = code_beg + size(u8);
 		}
 
 		return s;
@@ -832,6 +843,14 @@ namespace another_toml
 	std::string to_unescaped_string(std::string_view str)
 	{
 		return *replace_escape_chars<false>(str);
+	}
+
+	// same as above, except it also matches surrogate pair escape codes, 
+	// such as those used by JSON
+	// This is an internal function only used for testing
+	std::string to_unescaped_string2(std::string_view str)
+	{
+		return *replace_escape_chars<false, true>(str);
 	}
 
 	std::string to_escaped_multiline(std::string_view str)
