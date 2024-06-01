@@ -1810,7 +1810,8 @@ namespace another_toml
 			return true;
 		}
 
-		switch (ch)
+		// NOTE: this switch statement was too permissive, toml only supports \r\n and \n
+		/*switch (ch)
 		{
 		case '\n':
 			[[fallthrough]];
@@ -1820,9 +1821,9 @@ namespace another_toml
 			return true;
 		default:
 			return false;
-		}
+		}*/
 
-		//return ch == '\n';
+		return ch == '\n';
 	}
 
 	//test ch against the list of forbidden chars above
@@ -3994,6 +3995,8 @@ namespace another_toml
 	template<bool NoThrow>
 	static root_node parse_toml(std::istream& strm)
 	{
+		// NOTE: root_node::data_type is a unique_ptr with a correctly templated deleter
+		//		for toml_internal_data
 		auto toml_data = root_node::data_type{ new detail::toml_internal_data{} };
 		auto& t = toml_data->nodes;
 		auto p_state = parser_state{ strm };
