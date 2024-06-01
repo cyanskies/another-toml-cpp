@@ -1548,9 +1548,10 @@ namespace another_toml
 						last_newline_dist += 2;
 					}
 
-					optional_newline(strm, last_newline_dist, o);
+					if( parent_type != node_type::inline_table)
+						optional_newline(strm, last_newline_dist, o);
 				}
-				else
+				else if (parent_type == node_type::table || parent_type == node_type::root_table)
 				{
 					strm << '\n';
 					last_newline_dist = {};
