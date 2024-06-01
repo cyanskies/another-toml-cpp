@@ -456,7 +456,7 @@ namespace another_toml
 
 						if (ret.ptr == &*minutes.first + minutes.length())
 						{
-							if (minutes < 60)
+							if (odt.offset_minutes < 60)
 								return odt;
 							else
 							{
