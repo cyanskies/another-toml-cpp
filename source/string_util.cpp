@@ -171,6 +171,9 @@ namespace another_toml
 		{
 		case 2:
 			max_days = 28;
+			// test for leap year
+			if (out.year % 4 == 0 && (out.year % 100 != 0 || out.year % 400 == 0))
+				max_days = 29;
 			break;
 		case 4:
 			[[fallthrough]];

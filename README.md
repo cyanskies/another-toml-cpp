@@ -275,11 +275,11 @@ auto success = database.good();
 ```
 	
 #### Templated Extraction Functions
-You can also convert nodes to values using the templated helper function `as_t<Type>()`.
+You can also convert nodes to values using the templated helper function `as_type<Type>()`.
 
 ```cpp
 auto enabled_value = database.find_child("enabled");
-auto is_enabled = enabled_value.as_t<bool>();
+auto is_enabled = enabled_value.as_type<bool>();
 ```
 
 There is also a templated `get_value<Type>(std::string_view)` function to
@@ -312,8 +312,8 @@ We can also extract all the child nodes as a `std::vector` using `get_children()
 ```cpp
 auto data_array = database.find_child("data");
 auto elements = data_array.get_children();
-auto data_strings = elements[0].as_t<std::vector<std::string>>();
-auto data_floats = elements[1].as_t<std::vector<double>>();
+auto data_strings = elements[0].as_type<std::vector<std::string>>();
+auto data_floats = elements[1].as_type<std::vector<double>>();
 ```
 
 #### Extracting Tables
@@ -368,7 +368,7 @@ for (auto table_elm : products_array)
 
 ### Generating a TOML Document
 Another TOML can also output TOML documents, we'll generate the example document near the top
-of this file. We use `another_toml::writer` to describe out document and then write it out.
+of this file. We use `another_toml::writer` to describe our document and then write it out.
 
 ```cpp	
 auto w = toml::writer{};
@@ -685,15 +685,15 @@ number of spaces. If you don't want any indentation then disable
 
 ```cpp
 auto opts = toml::writer_options{};
-opts.indent_string = "nnnnnn";
+opts.indent_string = "------";
 auto w = toml::writer{};
 w.set_options(opts);
 ```
 ```toml
 #document output
 [a]
-nnnnnn[a.b]
-nnnnnnnnnnnn[a.b.c]
+------[a.b]
+------------[a.b.c]
 ```
 
 ##### Ascii Output
