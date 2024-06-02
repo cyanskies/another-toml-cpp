@@ -84,15 +84,20 @@ namespace another_toml
 
 		struct internal_node
 		{
+			internal_node(std::string name, const node_type n_t) noexcept
+				: name{ std::move(name) }, type{ n_t } {}
+			internal_node(std::string name, const node_type n_t, const value_type v_t, variant_t value) noexcept
+				: name{ std::move(name) }, type{ n_t }, v_type{ v_t }, value{ std::move(value) } {}
+
 			std::string name;
-			node_type type = node_type::end;
-			value_type v_type = value_type::bad;
 			variant_t value;
-			table_def_type table_type = table_def_type::end;
-			// a closed table can still have child tables added, but not child keys
-			bool closed = true;
 			index_t next = bad_index;
 			index_t child = bad_index;
+			table_def_type table_type = table_def_type::end;
+			value_type v_type = value_type::bad;
+			node_type type;
+			// a closed table can still have child tables added, but not child keys
+			bool closed = true;
 		};
 
 		struct toml_internal_data
@@ -1070,14 +1075,11 @@ namespace another_toml
 	static void optional_indentation(std::ostream& strm, indent_level_t indent, const writer_options& o,
 		char_count_t& last_newline_dist)
 	{
-		if (o.indent_child_tables)
+		for (auto i = indent_level_t{}; i < indent; ++i)
 		{
-			for (auto i = indent_level_t{}; i < indent; ++i)
-			{
-				strm << o.indent_string;
-				const auto str_size = size(o.indent_string);
-				append_line_length(last_newline_dist, str_size, o);
-			}
+			strm << o.indent_string;
+			const auto str_size = size(o.indent_string);
+			append_line_length(last_newline_dist, str_size, o);
 		}
 	}
 

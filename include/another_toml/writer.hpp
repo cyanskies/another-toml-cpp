@@ -35,27 +35,25 @@ namespace another_toml
 	// Configurable options for controlling writer output
 	struct writer_options
 	{
+		// Added to the start of an indented line (may be repeated multiple times)
+		// Set to an empty string to disable indentation
+		std::string indent_string = { '\t' };
 		// How many characters before splitting next array element to new line.
 		// Set to dont_split_lines to never split.
 		std::int16_t max_line_length = 80;
 		static constexpr auto dont_split_lines = std::numeric_limits<std::int16_t>::max();
-		// If true, avoids unrequired whitespace eg: name = value -> name=value.
-		bool compact_spacing = false;
-		// Add an indentation level for each child table.
-		bool indent_child_tables = true;
-		// Added to the start of an indented line (may be repeated multiple times)
-		// only has an effect if indent_child_tables = true.
-		std::string indent_string = { '\t' };
 		// Output only ascii characters (unicode sequences are escaped).
 		bool ascii_output = false;
+		// If true, avoids unrequired whitespace eg: name = value -> name=value.
+		bool compact_spacing = false;
 		// Skip writing redundant table headers.
 		// eg. for [a.b.c], [a] and [a.b] only need to be written if they have keys in them.
 		bool skip_empty_tables = true;
 		// Date Time separator.
 		enum class date_time_separator_t : std::uint8_t
 		{
-			big_t, // 1979-05-27T07:32:00Z
-			whitespace // 1979-05-27 07:32:00Z
+			big_t,		// 1979-05-27T07:32:00Z
+			whitespace	// 1979-05-27 07:32:00Z
 		};
 
 		// Default to big_t.

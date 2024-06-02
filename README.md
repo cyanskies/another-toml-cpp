@@ -656,32 +656,14 @@ compact_spacing_off = [ 1, 2, 3 ]
 compact_spacing_on=[1,2,3]
 ```
 
-##### Indent Child Tables
-Set `writer_options::indent_child_tables`.
-
-If enabled then an indentation will be added for each layer of child table, the indentation is a single tab('\t') character by default.
-
-```toml
-[a]
-name="a"
-
-	[a.b]
-	key="value"
-
-		[a.b.c]
-
-#indentation isn't added for skipped tables(see skip empty tables)
-[x.y.z]
-```
-
 ##### Indent String
 Set `writer_options::indent_string`.
 
-This string is used to indent lines, you can replace it
-to control how much indentation is used. Most users will 
-leave it as a tab character or replace it with the desired
-number of spaces. If you don't want any indentation then disable
-**indent child tables**.
+Indentation will be added for each layer of rendered child table (skipped empty tables won't increase indentation).
+This string is used to indent lines, you can replace it to control how much
+indentation is used. Most users will leave it as a tab character or replace it
+with the desired number of spaces. If you don't want any indentation then
+set **indent_string** to an empty string.
 
 ```cpp
 auto opts = toml::writer_options{};
