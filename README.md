@@ -12,7 +12,7 @@ the functions to confirm that nodes are valid and the expected kind of toml elem
 * List `another-toml-cpp` as a dependency in `target_link_libraries`
 
 ## Tests
-Another TOML passes the tests at `BurntSushi/toml-test`(as of v1.3.0).
+Another TOML passes the tests at `BurntSushi/toml-test`(as of v1.5.0).
 Repo at: https://github.com/cyanskies/another-toml-test is used for testing.
 
 ## Usage
