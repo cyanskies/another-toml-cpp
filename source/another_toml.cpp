@@ -29,6 +29,7 @@
 #include <regex>
 #include <sstream>
 #include <string_view>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -111,6 +112,20 @@ namespace another_toml
 		{
 			assert(size(d.nodes) > i);
 			return d.nodes[i].next;
+		}
+
+		static index_t find_parent(const toml_internal_data& d, const index_t i) noexcept
+		{
+			auto index = i;
+			auto prev = i;
+			while (--index <= i)
+			{
+				if (d.nodes[index].next == prev)
+					prev = index;
+				if (d.nodes[index].child == prev)
+					return index;
+			}
+			return bad_index;
 		}
 	}
 
@@ -2359,6 +2374,12 @@ namespace another_toml
 			return s;
 	}
 
+	// used in parse_key_name to select the correct table type
+	template<bool Table>
+	struct table_type_constant : std::integral_constant<table_def_type, table_def_type::dotted> {};
+	template<>
+	struct table_type_constant<true> : std::integral_constant<table_def_type, table_def_type::header> {};
+
 	template<bool NoThrow, bool Table = false>
 	static key_name parse_key_name(parser_state& strm, detail::toml_internal_data& d, std::size_t& key_char_begin)
 	{
@@ -2530,7 +2551,7 @@ namespace another_toml
 					auto child = find_child(d, parent, *name);
 					
 					if (child == bad_index)
-						child = insert_child_table<NoThrow>(parent, std::move(*name), d, table_def_type::dotted);
+						child = insert_child_table<NoThrow>(parent, std::move(*name), d, table_type_constant<Table>::value);
 					else if(auto& c = d.nodes[child]; 
 						c.type == node_type::array_tables)
 					{
@@ -3607,8 +3628,22 @@ namespace another_toml
 			}
 		}
 
+		// NOTE: if the key name function created one or more dotted table names
+		//		eg. t1.t2.t3.key_name
+		//		then we need to add all the new dotted table names to the open_tables list
 		if (toml_data.nodes[key_str.parent].closed == false)
+		{
 			strm.open_tables.emplace_back(key_str.parent);
+			auto parent = detail::find_parent(toml_data, key_str.parent);
+			while (parent != bad_index)
+			{
+				auto& n = toml_data.nodes[parent];
+				if (n.closed == true || n.table_type != table_def_type::dotted)
+					break;
+				strm.open_tables.emplace_back(parent);
+				parent = detail::find_parent(toml_data, parent);
+			}
+		}
 
 		// NOTE: key_str.name has already been checked by this point
 		auto key = detail::internal_node{ std::move(*key_str.name), node_type::key };
