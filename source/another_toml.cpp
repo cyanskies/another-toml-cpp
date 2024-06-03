@@ -1098,7 +1098,7 @@ namespace another_toml
 		literal_multiline
 	};
 
-	constexpr bool is_unicode_whitespace(char32_t c) noexcept
+	static constexpr bool is_unicode_whitespace(char32_t c) noexcept
 	{
 		switch (c)
 		{
@@ -1198,7 +1198,7 @@ namespace another_toml
 		{
 			strm.put('\"');
 			++last_newline_dist;
-			const auto esc_str = o.ascii_output ? to_escaped_string2(str) : to_escaped_string(str);
+			const auto& esc_str = o.ascii_output ? to_escaped_string2(str) : to_escaped_string(str);
 			strm.write(data(esc_str), size(esc_str));
 			strm << '\"';
 			append_line_length(last_newline_dist, 2 + size(esc_str), o);
@@ -1212,7 +1212,7 @@ namespace another_toml
 		{
 			strm << "\"\"\"\n"s;
 			last_newline_dist = {};
-			auto esc_str = o.ascii_output ? to_escaped_multiline2(str) : to_escaped_multiline(str);
+			std::string esc_str = o.ascii_output ? to_escaped_multiline2(str) : to_escaped_multiline(str);
 			esc_str = add_multiline_wraps(esc_str, o, last_newline_dist);
 			auto newline = esc_str.find_last_of('\n');
 			if (newline == std::string::npos)
@@ -1238,7 +1238,7 @@ namespace another_toml
 		return;
 	}
 
-	constexpr uint8_t sort_value(node_type t) noexcept
+	static constexpr uint8_t sort_value(node_type t) noexcept
 	{
 		switch (t)
 		{
@@ -1292,7 +1292,7 @@ namespace another_toml
 					parent_type == node_type::root_table ||
 					parent_type == node_type::array_tables);
 
-				auto name_stack = stack;
+				decltype(stack) name_stack = stack;
 				name_stack.emplace_back(*beg);
 
 				auto indent = indent_level;
@@ -1394,7 +1394,7 @@ namespace another_toml
 			{
 				const auto indent = indent_level + 1;
 
-				auto name_stack = stack;
+				decltype(stack) name_stack = stack;
 				name_stack.emplace_back(*beg);
 				const auto child_tables = get_children(*beg, d);
 				const auto child_end = std::end(child_tables);
@@ -1645,7 +1645,7 @@ namespace another_toml
 		return o;
 	}
 
-	void insert_bad(detail::toml_internal_data& d)
+	static void insert_bad(detail::toml_internal_data& d)
 	{
 		d.nodes.emplace_back(internal_node{ {}, node_type::end });
 		return;
@@ -1827,24 +1827,11 @@ namespace another_toml
 			return true;
 		}
 
-		// NOTE: this switch statement was too permissive, toml only supports \r\n and \n
-		/*switch (ch)
-		{
-		case '\n':
-			[[fallthrough]];
-		case '\f':
-			[[fallthrough]];
-		case '\v':
-			return true;
-		default:
-			return false;
-		}*/
-
 		return ch == '\n';
 	}
 
 	//test ch against the list of forbidden chars above
-	constexpr bool comment_forbidden_char(char ch) noexcept
+	static constexpr bool comment_forbidden_char(char ch) noexcept
 	{
 		/*
 		constexpr auto comment_forbidden_chars = std::array<char, 32>{
@@ -1866,7 +1853,7 @@ namespace another_toml
 
 	// limit to a-z, A-Z, 0-9, '-' and '_'
 	// NOTE: this changes in TOML 1.1
-	constexpr bool valid_key_name_char(char ch) noexcept
+	static constexpr bool valid_key_name_char(char ch) noexcept
 	{
 		return ch == '-'			||
 			ch >= '0' && ch <= '9'	||
@@ -2112,13 +2099,13 @@ namespace another_toml
 	}
 
 	// Tests if the char is the start of a unicode code point
- 	constexpr bool is_unicode_start(char c) noexcept
+ 	static constexpr bool is_unicode_start(char c) noexcept
 	{
 		return c & 0x80 && c & 0x40;
 	}
 
 	// Tests if the char is part of a code point, but wasn't the start
-	constexpr bool is_unicode_continuation(char c) noexcept
+	static constexpr bool is_unicode_continuation(char c) noexcept
 	{
 		return c & 0x80 && !(c & 0x40);
 	}
@@ -2173,7 +2160,7 @@ namespace another_toml
 		return unicode_error_char;
 	}
 
-	constexpr bool invalid_string_chars(char ch) noexcept
+	static constexpr bool invalid_string_chars(char ch) noexcept
 	{
 		return ((ch >= 0 && ch < 32) || ch == 127) && ch != '\t';
 	}
@@ -3647,7 +3634,9 @@ namespace another_toml
 			}
 		}
 
-		// NOTE: key_str.name has already been checked by this point
+		// NOTE: key_str.name has already been checked by this point in parse_key_name
+		//		or just above in the NoThrow constexpr block
+		assert(key_str.name.has_value());
 		auto key = detail::internal_node{ std::move(*key_str.name), node_type::key };
 		try
 		{

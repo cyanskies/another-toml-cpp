@@ -670,7 +670,7 @@ namespace another_toml
 		if (empty(s))
 			return "\"\""s;
 
-		auto out = ascii ?
+		std::string out = ascii ?
 			to_escaped_string2(s) : 
 			to_escaped_string(s);
 		if (out != s ||
