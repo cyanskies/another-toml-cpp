@@ -629,6 +629,7 @@ writer uses by default. A description of each setting is below:
 
 ##### Max Line Length
 Set `writer_options::max_line_length`.
+Set to 80 characters by default.
 
 How many characters an output line should have before splitting. The lines are only
 split at valid split points, such as after the first '[' of an array or after each
@@ -637,7 +638,8 @@ the strings value.
 
 Set to `writer_options::dont_split_lines` to not split lines.
 NOTE: Length calculations are simple approximations, not a guarrantee to split the 
-line at a specific column.
+line at a specific column. Notably splits will only be added after complete values (eg. a whole datetime) 
+or inbetween words in a non-literal string type.
 
 ```toml
 line_length_short = [
@@ -647,6 +649,7 @@ line_length_short = [
 
 ##### Compact Spacing
 Set `writer_options::compact_spacing`.
+Enabled by default.
 
 If enabled the writer will skip any optional whitespace, can be used
 to reduce document size at the cost of readability(doesn't effect array line splitting).
@@ -658,6 +661,7 @@ compact_spacing_on=[1,2,3]
 
 ##### Indent String
 Set `writer_options::indent_string`.
+Set to a single tab by default.
 
 Indentation will be added for each layer of rendered child table (skipped empty tables won't increase indentation).
 This string is used to indent lines, you can replace it to control how much
@@ -678,14 +682,30 @@ w.set_options(opts);
 ------------[a.b.c]
 ```
 
+##### Indent After Line Split
+Set `writer_options::indent_after_line_split`
+Enabled by default.
+
+While this is enabled there will be an extra indent when a line split is inserted
+during a long value. `writer_options::indent_string` is used for the indent, unless
+that string is empty, then a single tab will be used instead.
+
+```toml
+line_length_short = [
+	1, 2, 3, 4, 5, 6,
+	7, 8, 9, 10 ]
+```
+
 ##### Ascii Output
 Set `writer_options::ascii_output`.
+Disabled by default.
 
 Output only ascii characters, unicode characters will be replaced by
 escape sequences.
 
 ##### Skip Empty Tables
 Set `writer_options::skip_empty_tables`.
+Enabled by default.
 
 Don't output empty tables, unless they are leaf tables.
 
@@ -711,12 +731,14 @@ datetime and local datetime types:
 
 ##### Simple Numerical Output
 Set `writer_options::simple_numerical_output`.
+Disabled by default.
 
 If set, overrides any output options set when calling `write` or `write_value`
 with integrals and floats, instead writes them out in base 10 and fixed notation.
 
 ##### UTF-8 Byte Order Mark
 Set `writer_options::utf8_bom`.
+Disabled by default.
 
 If set, the output will include a UTF-8 BOM at the beginning. Enable this
 only if you expect the output to be read by a program that uses the BOM to detect 
