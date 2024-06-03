@@ -1047,7 +1047,7 @@ namespace another_toml
 
 	using char_count_t = std::int16_t;
 	
-	static void append_line_length(char_count_t& line, std::size_t length, const writer_options& o) noexcept
+	static void append_line_length(char_count_t& line, const std::size_t length, const writer_options& o) noexcept
 	{
 		if (length > o.max_line_length)
 			line = o.max_line_length + 1;
@@ -1065,6 +1065,20 @@ namespace another_toml
 		{
 			strm << '\n';
 			last_newline = {};
+
+			if (o.indent_after_line_split)
+			{
+				if (empty(o.indent_string))
+				{
+					strm << '\t';
+					append_line_length(last_newline, 1, o);
+				}
+				else
+				{
+					strm << o.indent_string;
+					append_line_length(last_newline, size(o.indent_string), o);
+				}
+			}
 			return true;
 		}
 		return false;
@@ -1072,15 +1086,16 @@ namespace another_toml
 
 	using indent_level_t = std::int32_t;
 
-	static void optional_indentation(std::ostream& strm, indent_level_t indent, const writer_options& o,
-		char_count_t& last_newline_dist)
+	static void optional_indentation(std::ostream& strm, const indent_level_t indent,
+		const writer_options& o, char_count_t& last_newline_dist)
 	{
+		const auto str_size = size(o.indent_string);
 		for (auto i = indent_level_t{}; i < indent; ++i)
 		{
 			strm << o.indent_string;
-			const auto str_size = size(o.indent_string);
 			append_line_length(last_newline_dist, str_size, o);
 		}
+		return;
 	}
 
 	// Returns true if the string can be output as a literal
@@ -1098,13 +1113,13 @@ namespace another_toml
 		literal_multiline
 	};
 
-	static constexpr bool is_unicode_whitespace(char32_t c) noexcept
+	static constexpr bool is_unicode_whitespace(const char32_t c) noexcept
 	{
 		switch (c)
 		{
-		case '\t':
+		case U'\t':
 			[[fallthrough]];
-		case ' ':
+		case U' ':
 			[[fallthrough]];
 		//case U'\xA0': // No break space
 		//	[[fallthrough]];
@@ -1139,32 +1154,36 @@ namespace another_toml
 		}
 	}
 
-	static std::string add_multiline_wraps(std::string_view str, const writer_options& o, std::int16_t& last_newline_dist)
+	static std::string add_multiline_wraps(std::string_view str, const writer_options& o,
+		std::int16_t& last_newline_dist, const indent_level_t indent_level)
 	{
 		auto unicode = unicode8_to_unicode32(str);
-		// need to detect spaces and unicode newline chars
+		auto stream = std::ostringstream{};
+
+		// need to detect unicode spaces as locations to add newlines
 		for (auto i = std::size_t{}; i < size(unicode); ++i)
 		{
-			if (last_newline_dist > o.max_line_length
-				&& is_unicode_whitespace(unicode[i]))
+			// we need to lookahead before line splitting as a following whitespace will be consumed
+			if (i + 1 < size(unicode) && is_unicode_whitespace(unicode[i]) && !is_unicode_whitespace(unicode[i + 1]))
 			{
-				unicode.insert(++i, U"\\\n"s);
-				++i;
-				last_newline_dist = {};
-				continue;
+				if (optional_newline(stream, last_newline_dist, o))
+				{
+					optional_indentation(stream, indent_level, o, last_newline_dist);
+					const auto as_uni = unicode8_to_unicode32(stream.str());
+					unicode.insert(++i, 1, U'\\'); // insert / char before endline
+					unicode.insert(++i, as_uni);
+					i += size(as_uni);
+					stream.str({}); // clear stream buffer
+					continue;
+				}
 			}
-
-			if (unicode[i] == '\n')
-				last_newline_dist = {};
-			else
-				++last_newline_dist;
+			++last_newline_dist;
 		}
-
 		return unicode32_to_unicode8(unicode);
 	}
 
 	static void write_out_string(std::ostream& strm, const string_t& string_extra, std::string_view str,
-		const writer_options& o, char_count_t& last_newline_dist)
+		const writer_options& o, char_count_t& last_newline_dist, const indent_level_t indent_level)
 	{
 		auto type = string_out_type::default;
 		if (string_extra.literal)
@@ -1190,7 +1209,7 @@ namespace another_toml
 
 		if(type == string_out_type::literal_multiline_one_line &&
 			str.find('\n') != std::string_view::npos)
-			type = type = string_out_type::literal_multiline;
+			type = string_out_type::literal_multiline;
 
 		switch (type)
 		{
@@ -1210,15 +1229,15 @@ namespace another_toml
 		}break;
 		case string_out_type::multiline:
 		{
-			strm << "\"\"\"\n"s;
-			last_newline_dist = {};
+			strm << "\"\"\""s;
+			append_line_length(last_newline_dist, 3, o);
 			std::string esc_str = o.ascii_output ? to_escaped_multiline2(str) : to_escaped_multiline(str);
-			esc_str = add_multiline_wraps(esc_str, o, last_newline_dist);
+			esc_str = add_multiline_wraps(esc_str, o, last_newline_dist, indent_level);
 			auto newline = esc_str.find_last_of('\n');
 			if (newline == std::string::npos)
 				newline = {};
 			strm << esc_str << "\"\"\""s;
-			append_line_length(last_newline_dist, size(esc_str) - newline + 3, o);
+			append_line_length(last_newline_dist, 3, o);
 		}break;
 		case string_out_type::literal_multiline:
 		{
@@ -1579,7 +1598,7 @@ namespace another_toml
 				if (c_ref.v_type == value_type::string)
 				{
 					const auto& string_extra = std::get<string_t>(c_ref.value);
-					write_out_string(strm, string_extra, c_ref.name, o, last_newline_dist);
+					write_out_string(strm, string_extra, c_ref.name, o, last_newline_dist, indent_level);
 				}
 				else if (c_ref.v_type == value_type::bad)
 					throw toml_error{ "Value node with bad data, unable to output"s };
@@ -1614,7 +1633,8 @@ namespace another_toml
 						}
 					}
 
-					optional_newline(strm, last_newline_dist, o);
+					if (optional_newline(strm, last_newline_dist, o))
+						optional_indentation(strm, indent_level, o, last_newline_dist);
 				}
 				
 				if constexpr (WriteOne)
