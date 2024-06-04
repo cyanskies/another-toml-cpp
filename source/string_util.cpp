@@ -315,7 +315,11 @@ namespace another_toml
 		const auto& seconds_frac = matches[static_cast<std::size_t>(match_index::seconds_frac)];
 		if (seconds_frac.matched)
 		{
-			const auto frac_end = &*seconds_frac.first + seconds_frac.length();
+			const auto frac_end = std::min(&*seconds_frac.first + seconds_frac.length(),
+				// add extra digit to account for the '.'
+				&*seconds_frac.first + std::numeric_limits<decltype(out.seconds_frac)>::digits10 + 1);
+
+			// only scan, at most, digits10 number of digits in order to truncate precision
 			ret = std::from_chars(&*seconds_frac.first, frac_end, out.seconds_frac);
 			constexpr auto seconds_frac_range = "Seconds fractional component out of range.\n";
 			

@@ -67,7 +67,7 @@ namespace another_toml
 
 		// Internal data storage type
 		struct toml_internal_data;
-		// Deleter above type
+		// Deleter for above type
 		struct toml_data_deleter
 		{
 		public:

@@ -41,7 +41,7 @@ namespace another_toml
 		std::uint8_t hours = {},
 			minutes = {},
 			seconds = {};
-		float seconds_frac = {};
+		double seconds_frac = {};
 	};
 
 	// Compound date/time type
