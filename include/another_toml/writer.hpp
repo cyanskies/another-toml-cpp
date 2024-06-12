@@ -42,6 +42,8 @@ namespace another_toml
 		// Set to dont_split_lines to never split.
 		std::int16_t max_line_length = 80;
 		static constexpr auto dont_split_lines = std::numeric_limits<std::int16_t>::max();
+		// Add an indentation level for each child table.
+		bool indent_child_tables = true;
 		// indent wrapped values after a split line, if indent_string is empty then a tab character will be used to indent
 		bool indent_after_line_split = true;
 		// Output only ascii characters (unicode sequences are escaped).

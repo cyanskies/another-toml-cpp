@@ -88,7 +88,7 @@ namespace another_toml
 		bool has_sibling() const noexcept;
 
 		// Throws: bad_node if good() == false for this node
-		// Throws: node_not_found if has_children() == false
+		// Throws: node_not_found if has_sibling() == false
 		basic_node<> get_next_sibling() const;
 
 		// get child with the provided name
@@ -138,7 +138,7 @@ namespace another_toml
 		time as_time_local() const;
 
 		// Extracts this node as the requested type.
-		// `T` can be a container if this node is a heterogeneous array
+		// `T` can be a container if this node is a homogeneous array
 		// `T` or `T::value_type` must be one of the types returned by 
 		// the extraction functions above (as_XXXXX()).
 		template<typename T>

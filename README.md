@@ -4,6 +4,20 @@ Another TOML is a cpp17 parser and writer for TOML v1.0.
 Another TOML can be used to parse toml files without exceptions, as long as you call
 the functions to confirm that nodes are valid and the expected kind of toml element or value type.
 
+## Unicode
+Another TOML performs unicode NFC normalisation when searching for tables and keys.
+Functions for performing normalised comparisons use algorithms from [uni-algo](https://github.com/uni-algo/uni-algo) and are provided for end users as well.
+
+```cpp
+// both "my_table" and the names of the child nodes will be normalised for comparison
+auto table = root_node.find_child("my_table");
+
+#include "another_toml/string_util.hpp"
+
+// compare utf8 strings for normalised equality
+return another_toml::unicode_string_equal("string one", "string two");
+```
+
 ## Installing
 * Clone this repository.
 * Include it in your project as a submodule.
@@ -12,7 +26,7 @@ the functions to confirm that nodes are valid and the expected kind of toml elem
 * List `another-toml-cpp` as a dependency in `target_link_libraries`
 
 ## Tests
-Another TOML passes the tests at `BurntSushi/toml-test`(as of v1.5.0).
+Another TOML passes the tests at `BurntSushi/toml-test` (as of v1.5.0).
 Repo at: https://github.com/cyanskies/another-toml-test is used for testing.
 
 ## Usage
@@ -33,13 +47,13 @@ temp_targets = { cpu = 79.5, case = 72.0 }
 
 [servers]
 
-	[servers.alpha]
-	ip = "10.0.0.1"
-	role = "frontend"
+[servers.alpha]
+ip = "10.0.0.1"
+role = "frontend"
 
-	[servers.beta]
-	ip = "10.0.0.2"
-	role = "backend"
+[servers.beta]
+ip = "10.0.0.2"
+role = "backend"
 
 [[products]]
 name = "Hammer"
@@ -286,7 +300,7 @@ There is also a templated `get_value<Type>(std::string_view)` function to
 cut out the boilerplate code needed to extract keys and their values.
 
 ```cpp
-auto is_enabled = database.get_value<bool>("enabled);
+auto is_enabled = database.get_value<bool>("enabled");
 ```
 
 `get_value` will throw exceptions if the key is missing or if the value
@@ -663,33 +677,54 @@ compact_spacing_on=[1,2,3]
 Set `writer_options::indent_string`.
 Set to a single tab by default.
 
-Indentation will be added for each layer of rendered child table (skipped empty tables won't increase indentation).
 This string is used to indent lines, you can replace it to control how much
 indentation is used. Most users will leave it as a tab character or replace it
-with the desired number of spaces. If you don't want any indentation then
-set **indent_string** to an empty string.
+with the desired number of spaces. The indentation string must be made up of
+whitespace characters, otherwise the resulting toml files will be invalid.
+Indentation is used by **Indent Child Tables** and **Indent After Line Split**.
 
 ```cpp
 auto opts = toml::writer_options{};
-opts.indent_string = "------";
+opts.indent_string = " ";
+opts.indent_child_tables = true; // See 'Indent Child Tables' below 
 auto w = toml::writer{};
 w.set_options(opts);
 ```
 ```toml
-#document output
 [a]
-------[a.b]
-------------[a.b.c]
+key = "value"
+
+ [a.b]
+ key = "value"
+
+  [a.b.c]
+```
+
+##### Indent Child Tables
+Set `writer_options::indent_child_tables`.
+Disabled by default.
+
+If enabled then an indentation will be added for each layer of child table.
+
+```toml
+[a]
+name = "a"
+
+	[a.b]
+	key = "value"
+
+		[a.b.c]
+
+#indentation isn't added for skipped tables (see skip empty tables)
+[x.y.z]
 ```
 
 ##### Indent After Line Split
 Set `writer_options::indent_after_line_split`
 Enabled by default.
 
-While this is enabled there will be an extra indent when a line split is inserted
-during a long value. `writer_options::indent_string` is used for the indent, unless
-that string is empty, then a single tab will be used instead.
-
+While this is enabled there will be an indent added when a line split is inserted
+during a long value.
 ```toml
 line_length_short = [
 	1, 2, 3, 4, 5, 6,
@@ -700,7 +735,7 @@ line_length_short = [
 Set `writer_options::ascii_output`.
 Disabled by default.
 
-Output only ascii characters, unicode characters will be replaced by
+Output only ascii characters, all unicode characters will be replaced by
 escape sequences.
 
 ##### Skip Empty Tables
@@ -728,6 +763,13 @@ datetime and local datetime types:
 
 * `writer_options::date_time_separator_t::big_t` (default)
 * `writer_options::date_time_separator_t::whitespace` 
+
+```toml
+# big_t
+date = 1979-05-27T07:32:00
+# whitespace
+date = 1979-05-27 07:32:00
+```
 
 ##### Simple Numerical Output
 Set `writer_options::simple_numerical_output`.

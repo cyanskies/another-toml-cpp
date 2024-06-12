@@ -1089,11 +1089,14 @@ namespace another_toml
 	static void optional_indentation(std::ostream& strm, const indent_level_t indent,
 		const writer_options& o, char_count_t& last_newline_dist)
 	{
-		const auto str_size = size(o.indent_string);
-		for (auto i = indent_level_t{}; i < indent; ++i)
+		if (o.indent_child_tables)
 		{
-			strm << o.indent_string;
-			append_line_length(last_newline_dist, str_size, o);
+			const auto str_size = size(o.indent_string);
+			for (auto i = indent_level_t{}; i < indent; ++i)
+			{
+				strm << o.indent_string;
+				append_line_length(last_newline_dist, str_size, o);
+			}
 		}
 		return;
 	}
@@ -2503,6 +2506,7 @@ namespace another_toml
 			{
 				if (name)
 				{
+					// TODO: update error
 					if constexpr (NoThrow)
 					{
 						std::cerr << "Illigal character in name: \'\n";
@@ -2566,6 +2570,7 @@ namespace another_toml
 					{
 						if constexpr (!Table)
 						{
+							// TODO: update this error
 							if constexpr (NoThrow)
 							{
 								std::cerr << "Name heirarchy for keys shouldn't include table arrays"s;

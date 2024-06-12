@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.13)
 add_subdirectory(uni-algo)
 
 cmake_policy(SET CMP0048 NEW)
-project(another-toml-cpp VERSION 0.1 LANGUAGES CXX)
+project(another-toml-cpp VERSION 0.9 LANGUAGES CXX)
 
 add_library(${PROJECT_NAME})
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
