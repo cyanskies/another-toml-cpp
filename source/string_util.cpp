@@ -322,18 +322,8 @@ namespace another_toml
 			// only scan, at most, digits10 number of digits in order to truncate precision
 			ret = std::from_chars(&*seconds_frac.first, frac_end, out.seconds_frac);
 			constexpr auto seconds_frac_range = "Seconds fractional component out of range.\n";
-			
-			if (ret.ptr == &*seconds_frac.first && ret.ec == std::errc::result_out_of_range)
-			{
-				if constexpr (NoThrow)
-				{
-					std::cerr << seconds_frac_range;
-					return {};
-				}
-				else throw parsing_error{ seconds_frac_range };
-			}
-			
-			if (ret.ptr != frac_end)
+						
+			if (ret.ptr != frac_end || ret.ec == std::errc::result_out_of_range)
 			{
 				constexpr auto seconds_frac_error = "Error parsing seconds fractional component.\n";
 				if constexpr (NoThrow)
@@ -546,7 +536,9 @@ namespace another_toml
 			auto rep = float_rep::default;
 			const auto string_end = &string[0] + size(string);
 			const auto ret = std::from_chars(&string[0], string_end, floating_val);
-			if (ret.ptr == string_end)
+			if (ret.ec == std::errc::result_out_of_range)
+				return parse_float_string_return{ {}, {}, error_t::out_of_range };
+			else if (ret.ptr == string_end)
 			{
 				// The sub match that contains the scientific notation portion
 				// of a float
@@ -555,8 +547,6 @@ namespace another_toml
 					rep = float_rep::scientific;
 				return parse_float_string_return{ floating_val, rep };
 			}
-			else if (ret.ec == std::errc::result_out_of_range)
-				return parse_float_string_return{ {}, {}, error_t::out_of_range };
 		}
 
 		return parse_float_string_return{ {}, {}, error_t::bad };
@@ -573,6 +563,7 @@ namespace another_toml
 	{
 		if (!uni::is_valid_utf8(unicode))
 		{
+			// TODO: update error
 			if constexpr (NoThrow)
 			{
 				std::cerr << "Invalid utf-8 string"s;
