@@ -27,7 +27,7 @@
 
 namespace another_toml
 {
-	//thown by any of the parse functions
+	// thrown by any of the parse functions
 	class toml_error : public std::runtime_error
 	{
 	public:
@@ -45,28 +45,28 @@ namespace another_toml
 		std::size_t _line = {}, _col = {};
 	};
 
-	//thrown if eof is encountered in an unexpected location(inside a quote or table name, etc.)
+	// thrown if eof is encountered in an unexpected location(inside a quote or table name, etc.)
 	class unexpected_eof : public toml_error
 	{
 	public:
 		using toml_error::toml_error;
 	};
 
-	//thrown when encountering an unexpected character
+	// thrown when encountering an unexpected character
 	class unexpected_character :public toml_error
 	{
 	public:
 		using toml_error::toml_error;
 	};
 
-	//thrown when an element couldn't be parsed
+	// thrown when an element couldn't be parsed
 	class parsing_error :public toml_error
 	{
 	public:
 		using toml_error::toml_error;
 	};
 
-	//thrown if the toml file contains duplicate table or key declarations
+	// thrown if the toml file contains duplicate table or key declarations
 	class duplicate_element : public toml_error
 	{
 	public:
@@ -81,14 +81,14 @@ namespace another_toml
 		std::string _duplicate_name;
 	};
 
-	// Thrown by basic_node when calling fucntions on a node where good() == false
+	// Thrown by basic_node when calling functions on a node where good() == false
 	class bad_node : public toml_error
 	{
 	public:
 		using toml_error::toml_error;
 	};
 
-	//thrown when calling node::as_int... if the type
+	// thrown when calling node::as_int... if the type
 	// stored doesn't match the function return type
 	class wrong_type : public toml_error
 	{

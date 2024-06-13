@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "uni_algo/break_grapheme.h"
+#include "uni_algo/conv.h"
 
 #include "another_toml/except.hpp"
 #include "another_toml/internal.hpp"
@@ -2506,7 +2507,7 @@ namespace another_toml
 			{
 				if (name)
 				{
-					// TODO: update error
+					// TODO: update error invalid/key/newline-5
 					if constexpr (NoThrow)
 					{
 						std::cerr << "Illigal character in name: \'\n";
@@ -2570,15 +2571,27 @@ namespace another_toml
 					{
 						if constexpr (!Table)
 						{
-							// TODO: update this error
+							const auto write_error = [&strm, &c](std::ostream& o) {
+								const auto msg = "Cannot use a dotted name to add a key to a table array.\n";
+								const auto name_end = strm.col - 1;
+								const auto name_beg = name_end - size(c.name);
+								o << msg;
+								print_error_string(strm, name_beg, name_end, o);
+								return;
+							};
+
 							if constexpr (NoThrow)
 							{
-								std::cerr << "Name heirarchy for keys shouldn't include table arrays"s;
+								write_error(std::cerr);
 								insert_bad(d);
 								return {};
 							}
 							else
-								throw toml_error{ "Name heirarchy for keys shouldn't include table arrays"s };
+							{
+								auto string = std::ostringstream{};
+								write_error(string);
+								throw parsing_error{ string.str(), strm.line, strm.col };
+							}
 						}
 
 						child = c.child;
@@ -2732,7 +2745,6 @@ namespace another_toml
 		{
 			if constexpr (NoThrow)
 			{
-
 				return { value_type::bad, {}, {} };
 			}
 			else
@@ -3209,7 +3221,41 @@ namespace another_toml
 				strm.ignore();
 				str = multiline_string<NoThrow, DoubleQuote>(strm);
 				if (!str)
-					return false;
+				{
+					constexpr auto msg = "Unexpected error when parsing multiline string."sv;
+					if constexpr (NoThrow)
+					{
+						std::cerr << msg << '\n';
+						print_error_string(strm, str_start, strm.col, std::cerr);
+						insert_bad(toml_data);
+						return false;
+					}
+					else
+					{
+						auto string = std::ostringstream{};
+						string << msg << '\n';
+						print_error_string(strm, str_start, strm.col, string);
+						throw parsing_error{ string.str(), strm.line, strm.col};
+					}
+				}
+				else if (!uni::is_valid_utf8(*str))
+				{
+					constexpr auto msg = "Invalid unicode code points in multiline string.\n"sv;
+					if constexpr (NoThrow)
+					{
+						std::cerr << msg;
+						print_error_string(strm, str_start, strm.col, std::cerr);
+						insert_bad(toml_data);
+						return false;
+					}
+					else
+					{
+						auto string = std::ostringstream{};
+						string << msg;
+						print_error_string(strm, str_start, strm.col, string);
+						throw unicode_error{ string.str(), strm.line, str_start };
+					}
+				}
 
 				if constexpr (DoubleQuote)
 				{
@@ -3941,7 +3987,7 @@ namespace another_toml
 				}
 				else if (toml_data.nodes[table].closed)
 				{
-					const auto msg = "Attepted to reopen table: \""s + toml_data.nodes[table].name +
+					const auto msg = "Attempted to reopen table: \""s + toml_data.nodes[table].name +
 						"\", but this table has already been defined.\n"s;
 
 					if constexpr (NoThrow)

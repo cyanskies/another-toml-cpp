@@ -558,20 +558,11 @@ namespace another_toml
 		const auto unicode_bad_conversion = "conversion_error"s;
 	}
 
-	template<bool NoThrow, bool EscapeAllUnicode, bool EscapeNewline>
+	template<bool EscapeAllUnicode, bool EscapeNewline>
 	static std::optional<std::string> to_escaped_string(std::string_view unicode)
 	{
 		if (!uni::is_valid_utf8(unicode))
-		{
-			// TODO: update error
-			if constexpr (NoThrow)
-			{
-				std::cerr << "Invalid utf-8 string"s;
-				return {};
-			}
-			else
-				throw toml_error{ "Invalid utf-8 string"s };
-		}
+			throw toml_error{ "Invalid utf-8 string"s };
 
 		const auto u32 = uni::utf8to32u(unicode);
 		auto out = std::string{};
@@ -650,14 +641,17 @@ namespace another_toml
 		return out;
 	}
 
+	constexpr auto escape_newline = true, dont_escape_newline = false;
+	constexpr auto escape_all_unicode = true, dont_escape_unicode = false;
+
 	std::string to_escaped_string(std::string_view str)
 	{
-		return *to_escaped_string<false, false, true>(str);
+		return *to_escaped_string<dont_escape_unicode, escape_newline>(str);
 	}
 
 	std::string to_escaped_string2(std::string_view str)
 	{
-		return *to_escaped_string<false, true, true>(str);
+		return *to_escaped_string<escape_all_unicode, escape_newline>(str);
 	}
 
 	std::string escape_toml_name(std::string_view s, bool ascii)
@@ -682,6 +676,7 @@ namespace another_toml
 	std::string_view block_control(std::string_view s) noexcept;
 
 	// replace string chars with proper escape codes
+	// TODO: better error messages whereever this is called
 	template<bool NoThrow, bool Pairs = false>
 	std::optional<std::string> replace_escape_chars(std::string_view str)
 	{
@@ -840,9 +835,11 @@ namespace another_toml
 	// instantiate with true for another_toml.cpp to use
 	template std::optional<std::string> replace_escape_chars<true>(std::string_view);
 
+	constexpr auto no_throw_flag = false;
+
 	std::string to_unescaped_string(std::string_view str)
 	{
-		return *replace_escape_chars<false>(str);
+		return *replace_escape_chars<no_throw_flag>(str);
 	}
 
 	// same as above, except it also matches surrogate pair escape codes, 
@@ -850,17 +847,18 @@ namespace another_toml
 	// This is an internal function only used for testing
 	std::string to_unescaped_string2(std::string_view str)
 	{
-		return *replace_escape_chars<false, true>(str);
+		constexpr auto surrogate_pairs = true;
+		return *replace_escape_chars<no_throw_flag, surrogate_pairs>(str);
 	}
 
 	std::string to_escaped_multiline(std::string_view str)
 	{
-		return *to_escaped_string<false, false, false>(str);
+		return *to_escaped_string<dont_escape_unicode, dont_escape_newline>(str);
 	}
 
 	std::string to_escaped_multiline2(std::string_view str)
 	{
-		return *to_escaped_string<false, true, false>(str);
+		return *to_escaped_string<escape_all_unicode, dont_escape_newline>(str);
 	}
 
 	// based on uni_algo/examples/cpp_ranges.h
