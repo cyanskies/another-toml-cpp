@@ -1696,6 +1696,10 @@ namespace another_toml
 						p.table_type == n.table_type)
 						return child;
 
+					// TODO: invalid/inline-table/overwrite-01
+					// This error isnt rendered correctly 
+					// TODO: invalid/inline-table/overwrite-10 invalid/key/duplicate-keys-1 invalid/key/duplicate-keys-3 invalid/spec/inline-table-3-0
+					// Error carrot is in the wrong location for keys and table names that start with space
 					const auto msg = "Tried to insert duplicate element: "s + n.name +
 						", into: "s + (parent == 0 ? "root table"s : p.name) + ".\n"s;
 
@@ -1927,8 +1931,8 @@ namespace another_toml
 		}
 	}
 
-	static void print_error_string(parser_state& strm, std::size_t error_begin, std::size_t error_end,
-		std::ostream& cerr)
+	static void print_error_string(parser_state& strm, std::size_t error_begin,
+		std::size_t error_end, std::ostream& cerr)
 	{
 		auto line_display_strm = std::ostringstream{};
 		line_display_strm << strm.line + 1 << '>';
@@ -1960,10 +1964,16 @@ namespace another_toml
 		if (error_end == error_entire_line)
 			error_end = strm.toml_file.find_last_not_of(' ');
 
-		const auto is_position_control_char = [](auto ch) {
+		const auto is_position_control_char = [](char ch) {
 			return ch == '\v' ||
 				ch == '\r' ||
-				ch == '\f';
+				ch == '\f' ||
+				ch == '\b' ||
+				ch == char{ 127 } ||
+				// Remove any NULL chars
+				// NOTE: NULL chars end up surviving in the middle of the string, and cause
+				//		drawing the string to end early when it encounters the first NULL
+				ch == '\0';
 		};
 
 		auto iter = std::find_if(begin(strm.toml_file), end(strm.toml_file), is_position_control_char);
@@ -1973,8 +1983,15 @@ namespace another_toml
 		while (iter != end(strm.toml_file))
 		{
 			iter = strm.toml_file.erase(iter);
-			iter = strm.toml_file.insert(iter, begin(replacement_char), std::end(replacement_char));
+			// iter = strm.toml_file.insert(iter, begin(replacement_char), std::end(replacement_char));
 			iter = std::find_if(iter, end(strm.toml_file), is_position_control_char);
+		}
+
+		// if we left the string empty after erasing control chars
+		if (empty(strm.toml_file))
+		{
+			print_error_string(strm, error_begin, error_end, cerr);
+			return;
 		}
 
 		cerr << line_display << strm.toml_file;
@@ -2033,6 +2050,7 @@ namespace another_toml
 			++count;
 		}
 
+		cerr.put('\n');
 		return;
 	}
 
@@ -2189,6 +2207,20 @@ namespace another_toml
 		return ((ch >= 0 && ch < 32) || ch == 127) && ch != '\t';
 	}
 
+	// TODO: invalid/string/multiline-no-close-5 invalid/string/multiline-lit-no-close-4
+	// no msg on nothrow; unexpected eof on throw
+
+	// TODO: invalid/inline-table/trailing-comma
+	// carret of off by one
+
+	//escapes control codes and unexpected unicode chars
+	// TODO: merge this with the block control style printer
+	static std::ostream& print_invalid_chars(const char ch, std::ostream& strm)
+	{
+		strm << to_escaped_string2(std::string_view{ &ch, 1 });
+		return strm;
+	}
+
 	template<bool NoThrow, bool DoubleQuoted>
 	static std::optional<std::string> get_quoted_str(parser_state& strm)
 	{
@@ -2275,7 +2307,9 @@ namespace another_toml
 			if (invalid_string_chars(ch))
 			{
 				const auto print_error = [&strm, ch](std::ostream& o) {
-					o << "Unexpected character found in table/key name: \'\uFFFD\'.\n"s;
+					o << "Unexpected character found in table/key name: \'"s;
+					print_invalid_chars(ch, o); 
+					o << "\'.\n"s;
 					print_error_string(strm, strm.col - 1, strm.col, o);
 				};
 
@@ -2300,8 +2334,10 @@ namespace another_toml
 
 				if (unicode == unicode_error_char)
 				{
-					const auto print_error = [&strm, ch_index](std::ostream& o) {
-						o << "Invalid unicode character in string: \'\uFFFD\'.\n"s;
+					const auto print_error = [&strm, ch, ch_index](std::ostream& o) {
+						o << "Invalid unicode character in string: \'"s; 
+						print_invalid_chars(ch, o);
+						o << "\'.\n"s;
 						print_error_string(strm, ch_index, error_current_col, o);
 					};
 
@@ -3175,8 +3211,10 @@ namespace another_toml
 
 			if (invalid_string_chars(ch) && ch != '\n')
 			{
-				const auto print_error = [&strm](std::ostream& o) {
-					o << "Unexpected character in multiline string: \'\uFFFD\'.\n"s;
+				const auto print_error = [&strm, ch](std::ostream& o) {
+					o << "Unexpected character in multiline string: \'"s;
+					print_invalid_chars(ch, o);
+					o << "\'.\n"s;
 					print_error_string(strm, strm.col - 1, strm.col, o);
 				};
 
@@ -3198,6 +3236,7 @@ namespace another_toml
 			str.push_back(ch);
 		}
 
+		// TODO: This should be unexpected error while parsing multiline string
 		if constexpr (NoThrow)
 		{
 			return {};
@@ -3222,21 +3261,8 @@ namespace another_toml
 				str = multiline_string<NoThrow, DoubleQuote>(strm);
 				if (!str)
 				{
-					constexpr auto msg = "Unexpected error when parsing multiline string."sv;
-					if constexpr (NoThrow)
-					{
-						std::cerr << msg << '\n';
-						print_error_string(strm, str_start, strm.col, std::cerr);
-						insert_bad(toml_data);
-						return false;
-					}
-					else
-					{
-						auto string = std::ostringstream{};
-						string << msg << '\n';
-						print_error_string(strm, str_start, strm.col, string);
-						throw parsing_error{ string.str(), strm.line, strm.col};
-					}
+					// error already reported in multiline_string
+					return false;
 				}
 				else if (!uni::is_valid_utf8(*str))
 				{
@@ -3393,6 +3419,7 @@ namespace another_toml
 				auto u_ch = parse_unicode_char(ch, strm);
 				if (u_ch == unicode_error_char)
 				{
+					// TODO: print escaped character
 					const auto write_error = [&strm, ch_index](std::ostream& o) {
 						o << "Invalid unicode character(s) in stream: \'\uFFFD.\'\n";
 						print_error_string(strm, ch_index, error_current_col, o);
@@ -3542,7 +3569,7 @@ namespace another_toml
 			if (newline(strm, ch))
 			{
 				const auto write_error = [&strm](std::ostream& o) {
-					o << "Illigal newline in inline table\n";
+					o << "Illigal newline in inline table.\n";
 					print_error_string(strm, strm.col, strm.col, o);
 					return;
 				};
@@ -3567,7 +3594,7 @@ namespace another_toml
 				if (strm.token_stream.back() == token_type::comma)
 				{
 					const auto write_error = [&strm](std::ostream& o) {
-						o << "Trailing comma is forbidden in inline tables\n"s;
+						o << "Trailing comma is forbidden in inline tables.\n"s;
 						print_error_string(strm, strm.col, strm.col, o);
 						return;
 					};
@@ -3597,7 +3624,7 @@ namespace another_toml
 				!(back == token_type::inline_table || back == token_type::comma))
 			{
 				const auto write_error = [&strm](std::ostream& o) {
-					o << "Expected comma or end of inline table\n"s;
+					o << "Expected comma or end of inline table.\n"s;
 					print_error_string(strm, strm.col + 1, error_entire_line, o);
 					return;
 				};
@@ -3882,6 +3909,7 @@ namespace another_toml
 		{
 			const auto ch_index = strm.col - 1;
 			parse_line(strm);
+			// TODO: convert to stream lambda
 			const auto str = std::string_view{ &strm.toml_file[ch_index] };
 			auto graph_rng = uni::ranges::grapheme::utf8_view{ str };
 			const auto msg = "Unexpected character following table name: \'"s +
@@ -4015,7 +4043,7 @@ namespace another_toml
 			auto str = std::ostringstream{};
 			const auto line = strm.line, col = strm.col;
 			constexpr auto end_offset = Array ? 2 : 1;
-			print_error_string(strm, key_name_begin, end_offset, str);
+			print_error_string(strm, key_name_begin, strm.col - end_offset, str);
 			throw duplicate_element{ err.what() + str.str(), line, col, err.name() };
 		}
 
@@ -4143,7 +4171,10 @@ namespace another_toml
 					if constexpr (NoThrow)
 					{
 						if (table == bad_index)
+						{
+							insert_bad(*toml_data);
 							break;
+						}
 					}
 
 					continue;
@@ -4155,7 +4186,10 @@ namespace another_toml
 					if constexpr (NoThrow)
 					{
 						if (table == bad_index)
+						{
+							insert_bad(*toml_data);
 							break;
+						}
 					}
 
 					continue;
