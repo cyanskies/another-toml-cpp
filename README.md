@@ -26,8 +26,8 @@ return another_toml::unicode_string_equal("string one", "string two");
 * List `another-toml-cpp` as a dependency in `target_link_libraries`
 
 ## Tests
-Another TOML passes the tests at `BurntSushi/toml-test` (as of v1.5.0).
-Repo at: https://github.com/cyanskies/another-toml-test is used for testing.
+Another TOML passes the tests at `BurntSushi/toml-test` (as of v2.0.0).
+Repo at: https://github.com/cyanskies/another-toml-test builds an encoder and decoder for testing.
 
 ## Usage
 The examples in this section are used to read this example toml file
@@ -621,7 +621,7 @@ w.write_value(50, toml::writer::float_rep::scientific, 6);
 
 The supported representations are:
 * **default**: notation will be chosen based on the floats value
-* **fixed**: fractional notation (eg. 3.14)
+* **fixed**: decimal notation (eg. 3.14)
 * **scientific**: scientific notation (eg. 10e-4)
 
 Precision controls how many decimal places of precision will be written. Pass
@@ -663,10 +663,10 @@ line_length_short = [
 
 ##### Compact Spacing
 Set `writer_options::compact_spacing`.
-Enabled by default.
+Disabled by default.
 
 If enabled the writer will skip any optional whitespace, can be used
-to reduce document size at the cost of readability(doesn't effect array line splitting).
+to reduce document size at the cost of readability (doesn't effect array line splitting).
 
 ```toml
 compact_spacing_off = [ 1, 2, 3 ]
