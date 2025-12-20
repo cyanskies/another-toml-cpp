@@ -1964,6 +1964,9 @@ namespace another_toml
 		if (error_end == error_entire_line)
 			error_end = strm.toml_file.find_last_not_of(' ');
 
+		if (error_begin > error_end)
+			error_begin = error_end;
+
 		const auto is_position_control_char = [](char ch) {
 			return ch == '\v' ||
 				ch == '\r' ||
@@ -1983,7 +1986,7 @@ namespace another_toml
 		while (iter != end(strm.toml_file))
 		{
 			iter = strm.toml_file.erase(iter);
-			// iter = strm.toml_file.insert(iter, begin(replacement_char), std::end(replacement_char));
+			iter = strm.toml_file.insert(iter, begin(replacement_char), std::end(replacement_char));
 			iter = std::find_if(iter, end(strm.toml_file), is_position_control_char);
 		}
 
@@ -2000,7 +2003,7 @@ namespace another_toml
 
 		for (auto i = std::size_t{}; i < size(line_display); ++i)
 			cerr.put(' ');
-		
+
 		auto begin_addr = &strm.toml_file[error_begin];
 		auto end_addr = &strm.toml_file[error_end];
 
@@ -2231,8 +2234,11 @@ namespace another_toml
 		const auto string_begin = strm.col - 1;
 		constexpr auto missing_end_error_msg = "Quoted string missing end quote\n"sv;
 
-		while (strm.strm.good())
-		{
+		// grab an extra ascii character
+		auto get_ch = [&]()->std::tuple<char, bool> {
+			char ch;
+			bool eof;
+
 			try
 			{
 				std::tie(ch, eof) = strm.get_char<NoThrow>();
@@ -2251,7 +2257,7 @@ namespace another_toml
 				{
 					std::cerr << missing_end_error_msg;
 					print_error_string(strm, string_begin, strm.col, std::cerr);
-					return {};
+					return { {}, true };
 				}
 			}
 
@@ -2261,7 +2267,7 @@ namespace another_toml
 				{
 					std::cerr << missing_end_error_msg;
 					print_error_string(strm, string_begin, error_entire_line, std::cerr);
-					return {};
+					return { {}, true };
 				}
 				else
 				{
@@ -2272,35 +2278,34 @@ namespace another_toml
 				}
 			}
 
+			return { ch, eof };
+		};
+
+		while (strm.strm.good())
+		{
+			std::tie(ch, eof) = get_ch();
+
+			if (eof)
+				return {};
+
 			if (ch == delim)
 			{
-				if constexpr (DoubleQuoted)
+				strm.putback(ch);
+				break;
+			}
+
+			if constexpr (DoubleQuoted)
+			{
+				if (ch == '\\')
 				{
-					if (size(out) > 0)
-					{
-						//don't break on escaped quote: '\"'
-						if (out.back() != '\\')
-						{
-							strm.putback(ch);
-							break;
-						}
-						// but do break if escaped slash followed by quote: "\\""
-						else if (size(out) > 2 && out[size(out) - 2] == '\\')
-						{
-							strm.putback(ch);
-							break;
-						}
-					}
-					else
-					{
-						strm.putback(ch);
-						break;
-					}
-				}
-				else 
-				{
-					strm.putback(ch);
-					break;
+					out += '\\';
+					// skip over escape sequences
+					std::tie(ch, eof) = get_ch();
+					if (eof)
+						return {};
+
+					out += ch;
+					continue;
 				}
 			}
 

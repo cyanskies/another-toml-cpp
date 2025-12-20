@@ -654,6 +654,21 @@ namespace another_toml
 		return *to_escaped_string<escape_all_unicode, escape_newline>(str);
 	}
 
+	static bool invalid_unescaped_name(std::string_view s) noexcept
+	{
+		for (auto a : s)
+		{
+			if ((a >= 'A' && a <= 'Z') ||
+				(a >= 'a' && a <= 'z') ||
+				(a >= '0' && a <= '9') ||
+				a == '_' || a == '-')
+				continue;
+			return true;
+		}
+
+		return false;
+	}
+
 	std::string escape_toml_name(std::string_view s, bool ascii)
 	{
 		if (empty(s))
@@ -664,9 +679,7 @@ namespace another_toml
 			to_escaped_string(s);
 		if (out != s ||
 			contains_unicode(s) ||
-			out.find(' ') != std::string::npos ||
-			out.find('.') != std::string::npos ||
-			out.find('#') != std::string::npos)
+			invalid_unescaped_name(s))
 			out = '\"' + out + '\"';
 
 		return out;
