@@ -720,7 +720,7 @@ name = "a"
 ```
 
 ##### Indent After Line Split
-Set `writer_options::indent_after_line_split`
+Set `writer_options::indent_after_line_split`.
 Enabled by default.
 
 While this is enabled there will be an indent added when a line split is inserted

@@ -61,7 +61,7 @@ namespace another_toml
 		};
 
 		// Default to big_t.
-		date_time_separator_t date_time_separator = {};
+		date_time_separator_t date_time_separator = date_time_separator_t::big_t;
 
 		// Ignore per value override specifiers where possible.
 		// (eg. all ints output in base 10, floats in default mode rather than fixed or scientific)
@@ -82,7 +82,7 @@ namespace another_toml
 
 		// [tables]
 		// use end table to control nesting
-		void begin_table(std::string_view, table_def_type = table_def_type::header);
+		void begin_table(std::string_view name, table_def_type = table_def_type::header);
 		void end_table() noexcept;
 
 		// arrays:
@@ -101,21 +101,21 @@ namespace another_toml
 		// [[array]]
 		// keep calling begin_array_table with the same name
 		// to add new tables to the array
-		void begin_array_table(std::string_view);
+		void begin_array_table(std::string_view name);
 		void end_array_table() noexcept;
 
-		void write_key(std::string_view);
+		void write_key(std::string_view key);
 
 		// Write values on their own, for arrays
 
 		// Strings are required to be in utf-8
-		void write_value(std::string&& value);
+		void write_value(std::string value);
 
 		struct literal_string_t {};
 		static constexpr auto literal_string_tag = literal_string_t{};
 
 		// pass literal string tag to mark a string as being a literal
-		void write_value(std::string&& value, literal_string_t);
+		void write_value(std::string value, literal_string_t);
 
 		void write_value(std::string_view value);
 		void write_value(std::string_view value, literal_string_t);
@@ -127,9 +127,9 @@ namespace another_toml
 			return;
 		}
 
-		void write_value(const char* value, literal_string_t l)
+		void write_value(const char* value, literal_string_t)
 		{
-			write_value(std::string_view{ value }, l);
+			write_value(std::string_view{ value }, literal_string_t{});
 			return;
 		}
 
@@ -137,7 +137,7 @@ namespace another_toml
 
 		template<typename Integral,
 			std::enable_if_t<detail::is_integral_v<Integral>, int> = 0>
-		void write_value(Integral i, int_base = int_base::dec);
+		void write_value(Integral value, int_base = int_base::dec);
 
 		void write_value(double value, float_rep = float_rep::default, std::int8_t precision = auto_precision);
 		void write_value(bool value);

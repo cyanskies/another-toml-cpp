@@ -824,7 +824,7 @@ namespace another_toml
 		return new_node;
 	}
 	
-	void writer::write_value(std::string&& value)
+	void writer::write_value(std::string value)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::move(value), false });
 		if (_data->nodes[_stack.back()].type == node_type::key)
@@ -832,7 +832,7 @@ namespace another_toml
 		return;
 	}
 
-	void writer::write_value(std::string&& value, literal_string_t)
+	void writer::write_value(std::string value, literal_string_t)
 	{
 		write_value_impl(_stack.back(), *_data, value_type::string, string_cont{ std::move(value), true });
 		if (_data->nodes[_stack.back()].type == node_type::key)
