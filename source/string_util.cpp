@@ -533,7 +533,7 @@ namespace another_toml
 		{
 			const auto string = remove_underscores(str);
 			auto floating_val = double{};
-			auto rep = float_rep::default;
+			auto rep = float_rep{};
 			const auto string_end = &string[0] + size(string);
 			const auto ret = std::from_chars(&string[0], string_end, floating_val);
 			if (ret.ec == std::errc::result_out_of_range)
