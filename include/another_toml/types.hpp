@@ -110,7 +110,7 @@ namespace another_toml
 
 	enum class float_rep : std::uint8_t
 	{
-		default,
+		default_formatting,
 		fixed,
 		scientific
 	};

@@ -139,7 +139,7 @@ namespace another_toml
 			std::enable_if_t<detail::is_integral_v<Integral>, int> = 0>
 		void write_value(Integral value, int_base = int_base::dec);
 
-		void write_value(double value, float_rep = float_rep::default, std::int8_t precision = auto_precision);
+		void write_value(double value, float_rep = {}, std::int8_t precision = auto_precision);
 		void write_value(bool value);
 		void write_value(date_time value);
 		void write_value(local_date_time value);

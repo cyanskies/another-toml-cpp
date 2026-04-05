@@ -43,7 +43,7 @@ namespace another_toml
 	struct parse_float_string_return
 	{
 		double value;
-		float_rep representation = float_rep::default;
+		float_rep representation = {};
 
 		enum class error_t : std::uint8_t
 		{
