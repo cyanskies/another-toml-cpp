@@ -44,6 +44,10 @@
 
 #include "another_toml/string_util.hpp"
 
+#ifdef ANOTHER_TOML_USE_CHRONO
+#include "another_toml/durations.hpp"
+#endif
+
 // Disable warning for characters and the current code page.
 // All string operations are for utf8 encoded strings.
 #pragma warning(disable : 4566)
@@ -80,8 +84,13 @@ namespace another_toml
 		};
 
 		using variant_t = std::variant<std::monostate, string_t, integral, floating, bool,
-			//dates,
-			date_time, local_date_time, date, time>;
+			// dates,
+			date_time, local_date_time, date, time
+		#ifdef ANOTHER_TOML_USE_CHRONO
+			// durations
+			, duration
+		#endif
+		>;
 
 		struct internal_node
 		{
@@ -506,6 +515,13 @@ namespace another_toml
 		{
 			return b ? "true"s : "false"s;
 		}
+
+#ifdef ANOTHER_TOML_USE_CHRONO
+		std::string operator()(duration d)
+		{
+			return utils::duration_to_string(d);
+		}
+#endif
 	};
 
 	template<bool R>
@@ -672,6 +688,24 @@ namespace another_toml
 			throw wrong_type{ e.what() };
 		}
 	}
+
+#ifdef ANOTHER_TOML_USE_CHRONO
+	template<bool R>
+	duration basic_node<R>::as_duration() const
+	{
+		if (!good())
+			throw bad_node{ "Called as_duration on a bad node"s };
+
+		try
+		{
+			return std::get<duration>(_data->nodes[_index].value);
+		}
+		catch (const std::bad_variant_access& e)
+		{
+			throw wrong_type{ e.what() };
+		}
+	}
+#endif
 
 	template class basic_node<true>;
 	template class basic_node<false>;
@@ -911,6 +945,16 @@ namespace another_toml
 			_stack.pop_back();
 		return;
 	}
+
+#ifdef ANOTHER_TOML_USE_CHRONO
+	void writer::write_value(duration value)
+	{
+		write_value_impl(_stack.back(), *_data, value_type::local_time, std::move(value));
+		if (_data->nodes[_stack.back()].type == node_type::key)
+			_stack.pop_back();
+		return;
+	}
+#endif
 
 	void writer::write(std::string_view key, double value, float_rep rep, std::int8_t precision)
 	{
@@ -2848,7 +2892,7 @@ namespace another_toml
 			if (ret.ptr == string_end)
 			{
 				//str = std::to_string(int_val);
-				return { value_type::integer, detail::integral{int_val, base_en}, std::to_string(int_val) };
+				return { value_type::integer, detail::integral{int_val, base_en}, std::string{ str } };
 			}
 			else if (ret.ec == std::errc::invalid_argument)
 			{
@@ -2858,9 +2902,7 @@ namespace another_toml
 				}
 				else
 				{
-					const auto pos = std::distance(data(str), ret.ptr);
-					assert(pos >= 0);
-					throw parsing_error{ "Failed to parse integer value\n"s, {}, static_cast<std::size_t>(pos) };
+					throw parsing_error{ "Failed to parse integer value\n"s };
 				}
 			}
 			else if (ret.ec == std::errc::result_out_of_range)
@@ -2873,7 +2915,77 @@ namespace another_toml
 					throw parsing_error{ "Integer value out of storable range\n"s, };
 			}
 		}
-		
+
+#ifdef ANOTHER_TOML_USE_CHRONO
+		// matches integrals with underscores followed by duration types
+		// also matches 0
+		constexpr auto duration_reg = R"(^[\+\-]?[1-9]+(_?([\d])+)*(h|min|s|ms|us|ns)$|^[\+\-]?0(h|min|s|ms|us|ns)$)";
+		if (std::regex_match(beg, end, std::regex{ duration_reg }))
+		{
+			const auto string = remove_underscores(str);
+
+			auto int_val = std::int64_t{};
+			const auto string_end = string.data() + size(string);
+			const auto ret = std::from_chars(string.data(), string_end, int_val);
+			
+			if (ret.ec == std::errc::invalid_argument)
+			{
+				if constexpr (NoThrow)
+				{
+					return { value_type::bad, {}, {} };
+				}
+				else
+				{
+					throw parsing_error{ "Failed to parse duration value\n"s, };
+				}
+			}
+			else if (ret.ec == std::errc::result_out_of_range)
+			{
+				if constexpr (NoThrow)
+				{
+					return { value_type::out_of_range, {}, {} };
+				}
+				else
+					throw parsing_error{ "duration value out of storable range\n"s, };
+			}
+
+			const auto postfix = std::string_view{ ret.ptr, static_cast<std::size_t>(std::distance(ret.ptr, string_end)) };
+			auto durat = duration{};
+			if (postfix == "h")
+			{
+				auto d = std::chrono::hours{ int_val };
+				durat = std::chrono::duration_cast<duration>(d);
+			}
+			else if(postfix == "min")
+			{
+				auto d = std::chrono::minutes{ int_val };
+				durat = std::chrono::duration_cast<duration>(d);
+			}
+			else if (postfix == "s")
+			{
+				auto d = std::chrono::seconds{ int_val };
+				durat = std::chrono::duration_cast<duration>(d);
+			}
+			else if (postfix == "ms")
+			{
+				auto d = std::chrono::milliseconds{ int_val };
+				durat = std::chrono::duration_cast<duration>(d);
+			}
+			else if (postfix == "us")
+			{
+				auto d = std::chrono::microseconds{ int_val };
+				durat = std::chrono::duration_cast<duration>(d);
+			}
+			else if (postfix == "ns")
+			{
+				auto d = std::chrono::nanoseconds{ int_val };
+				durat = std::chrono::duration_cast<duration>(d);
+			}
+			
+			return { value_type::duration, durat, std::string{ str} };
+		}
+#endif
+
 		using error_t = parse_float_string_return::error_t;
 		const auto float_ret = parse_float_string(str);
 		if (float_ret.error == error_t::none)

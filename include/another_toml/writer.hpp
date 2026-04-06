@@ -145,6 +145,9 @@ namespace another_toml
 		void write_value(local_date_time value);
 		void write_value(date value);
 		void write_value(time value);
+#ifdef ANOTHER_TOML_USE_CHRONO
+		void write_value(duration value);
+#endif
 
 		// Write a key value pair.
 		template<typename T>

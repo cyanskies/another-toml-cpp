@@ -22,6 +22,8 @@
 
 #include "another_toml/node.hpp"
 
+#include "another_toml/except.hpp"
+
 namespace another_toml
 {
 	template<bool R>
@@ -32,7 +34,7 @@ namespace another_toml
 		if (!key.good())
 			throw node_not_found{ "Unable to find key" };
 
-		return key.as_t<T>();
+		return key.as_type<T>();
 	}
 
 	template<bool R>
@@ -69,26 +71,30 @@ namespace another_toml
 		}
 		else
 		{
-			static_assert(detail::is_toml_type<T>, "as_t() must be called with an exact TOML type.")
+			static_assert(detail::is_toml_type<T>, "as_t() must be called with an exact TOML type.");
 
-				if constexpr (std::is_same_v<T, std::int64_t>)
-					return as_integer();
-				else if constexpr (std::is_same_v<T, double>)
-					return as_floating();
-				else if constexpr (std::is_same_v<T, bool>)
-					return as_boolean();
-				else if constexpr (std::is_same_v<T, std::string>)
-					return as_string();
-				else if constexpr (std::is_same_v<T, date>)
-					return as_date_local();
-				else if constexpr (std::is_same_v<T, time>)
-					return as_time_local();
-				else if constexpr (std::is_same_v<T, local_date_time>)
-					return as_date_time_local();
-				else if constexpr (std::is_same_v<T, date_time>)
-					return as_date_time();
+			if constexpr (std::is_same_v<T, std::int64_t>)
+				return as_integer();
+			else if constexpr (std::is_same_v<T, double>)
+				return as_floating();
+			else if constexpr (std::is_same_v<T, bool>)
+				return as_boolean();
+			else if constexpr (std::is_same_v<T, std::string>)
+				return as_string();
+			else if constexpr (std::is_same_v<T, date>)
+				return as_date_local();
+			else if constexpr (std::is_same_v<T, time>)
+				return as_time_local();
+			else if constexpr (std::is_same_v<T, local_date_time>)
+				return as_date_time_local();
+			else if constexpr (std::is_same_v<T, date_time>)
+				return as_date_time();
+		#ifdef ANOTHER_TOML_USE_CHRONO
+			else if constexpr (std::is_same_v<T, duration>)
+				return as_duration();
+		#endif
 		}
-		else
-			throw wrong_type{ "Unable to convert node to type" };
+			
+		throw wrong_type{ "Unable to convert node to type" };
 	}
 }

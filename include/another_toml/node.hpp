@@ -137,6 +137,10 @@ namespace another_toml
 		date as_date_local() const;
 		time as_time_local() const;
 
+#ifdef ANOTHER_TOML_USE_CHRONO
+		duration as_duration() const;
+#endif
+
 		// Extracts this node as the requested type.
 		// `T` can be a container if this node is a homogeneous array
 		// `T` or `T::value_type` must be one of the types returned by 

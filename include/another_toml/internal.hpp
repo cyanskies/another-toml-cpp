@@ -85,7 +85,11 @@ namespace another_toml
 			std::is_same_v<T, date> ||
 			std::is_same_v<T, time> ||
 			std::is_same_v<T, local_date_time> ||
-			std::is_same_v<T, date_time>;
+			std::is_same_v<T, date_time>
+#ifdef ANOTHER_TOML_USE_CHRONO
+			|| std::is_same_v<T, duration>
+#endif
+			;
 	}
 }
 

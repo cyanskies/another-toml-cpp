@@ -5,6 +5,8 @@ add_subdirectory(uni-algo)
 cmake_policy(SET CMP0048 NEW)
 project(another-toml-cpp VERSION 0.9 LANGUAGES CXX)
 
+option(ANOTHER_TOML_USE_CHRONO "Enable cpp chrono type in toml files")
+
 add_library(${PROJECT_NAME})
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
 
@@ -16,11 +18,16 @@ else()
     set_target_properties(${PROJECT_NAME} PROPERTIES RELEASE_POSTFIX -s)
 endif()
 
+if(ANOTHER_TOML_USE_CHRONO)
+	target_compile_definitions(${PROJECT_NAME} PUBLIC ANOTHER_TOML_USE_CHRONO)
+endif()
+
 cmake_policy(SET CMP0076 NEW)
 
 target_sources(${PROJECT_NAME}
 	PUBLIC
 	./include/another_toml/another_toml.hpp
+	./include/another_toml/durations.hpp
 	./include/another_toml/except.hpp
 	./include/another_toml/internal.hpp
 	./include/another_toml/node.hpp
@@ -32,6 +39,7 @@ target_sources(${PROJECT_NAME}
 	./include/another_toml/writer.inl
 	PRIVATE
 	./source/another_toml.cpp
+	./source/durations.cpp
 	./source/string_util.cpp
 )
 

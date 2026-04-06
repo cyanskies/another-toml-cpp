@@ -25,6 +25,10 @@
 
 #include <cstddef>
 
+#ifdef ANOTHER_TOML_USE_CHRONO
+#include <chrono>
+#endif
+
 namespace another_toml
 {
 	// Simple date type.
@@ -71,6 +75,9 @@ namespace another_toml
 		local_date_time,
 		local_date,
 		local_time,
+#ifdef ANOTHER_TOML_USE_CHRONO
+		duration,
+#endif
 		// The following values are internal only
 		bad, // detected as invalid
 		out_of_range
@@ -114,6 +121,10 @@ namespace another_toml
 		fixed,
 		scientific
 	};
+
+	#ifdef ANOTHER_TOML_USE_CHRONO
+	using duration = std::chrono::nanoseconds;
+	#endif
 
 	static constexpr auto auto_precision = std::int8_t{ -1 };
 
