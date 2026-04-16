@@ -297,6 +297,17 @@ namespace another_toml
 	}
 
 	template<bool R>
+	bool basic_node<R>::has_child(std::string_view name) const noexcept
+	{
+		if (!good() || (!table() && !inline_table()))
+			return false;
+
+		return std::any_of(begin(), end(), [name](auto& n) {
+			return n.as_string() == name;
+			});
+	}
+
+	template<bool R>
 	basic_node<> basic_node<R>::find_child(std::string_view name) const
 	{
 		if (!good())

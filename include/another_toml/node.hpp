@@ -25,6 +25,7 @@
 
 #include <cassert>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -91,6 +92,9 @@ namespace another_toml
 		// Throws: node_not_found if has_sibling() == false
 		basic_node<> get_next_sibling() const;
 
+		// return true if a child exists with the provided name
+		bool has_child(std::string_view) const noexcept;
+
 		// get child with the provided name
 		// test the return value using .good()
 		// NOTE: Only searches immediate children.
@@ -113,6 +117,8 @@ namespace another_toml
 		// Provide a default value to be returned if the key isn't found
 		template<typename T>
 		T get_value(std::string_view key_name, T default_return) const;
+		template<typename T>
+		std::optional<T> get_value(std::string_view key_name, no_throw_t) const noexcept;
 
 		// Iterator based interface for accessing child nodes
 		node_iterator begin() const noexcept;
@@ -147,6 +153,8 @@ namespace another_toml
 		// the extraction functions above (as_XXXXX()).
 		template<typename T>
 		T as_type() const;
+		template<typename T>
+		std::optional<T> as_type(no_throw_t) const noexcept;
 
 		// Shorthand for find_child
 		basic_node<> operator[](std::string_view str) const
