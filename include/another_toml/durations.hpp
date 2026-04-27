@@ -26,7 +26,7 @@
 
 #include "another_toml/types.hpp"
 
-namespace another_toml::utils
+namespace another_toml::util
 {
 	std::string duration_to_string(duration);
 }

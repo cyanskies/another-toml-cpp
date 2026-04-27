@@ -530,7 +530,7 @@ namespace another_toml
 #ifdef ANOTHER_TOML_USE_CHRONO
 		std::string operator()(duration d)
 		{
-			return utils::duration_to_string(d);
+			return util::duration_to_string(d);
 		}
 #endif
 	};
