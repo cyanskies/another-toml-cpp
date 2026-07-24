@@ -8,7 +8,7 @@ add_subdirectory(uni-algo)
 option(ANOTHER_TOML_USE_CHRONO "Enable cpp chrono type in toml files")
 
 add_library(another-toml-cpp)
-set_property(TARGET another-toml-cpp PROPERTY CXX_STANDARD 17)
+target_compile_features(another-toml-cpp PRIVATE cxx_std_17)
 
 if(BUILD_SHARED_LIBS)
     set_target_properties(another-toml-cpp PROPERTIES DEBUG_POSTFIX -d)

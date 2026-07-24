@@ -4494,4 +4494,39 @@ namespace another_toml
 	{
 		return parse<true>(filename);
 	}
+
+#if (defined(__cpp_char8_t) && __cpp_char8_t >= 201811L) && \
+	(defined (__cpp_lib_char8_t ) && __cpp_lib_char8_t >= 201907L)
+	root_node parse(std::u8string_view toml)
+	{
+		return parse<false>(reinterpret_cast<std::string_view>(toml));
+	}
+
+	root_node parse(const std::u8string& toml)
+	{
+		auto sv = std::u8string_view{ toml };
+		return parse<false>(reinterpret_cast<std::string_view>(sv));
+	}
+
+	root_node parse(const char8_t* toml)
+	{
+		return parse<false>(std::string_view{ reinterpret_cast<const char*>(toml) });
+	}
+
+	root_node parse(std::u8string_view toml, no_throw_t)
+	{
+		return parse<true>(reinterpret_cast<std::string_view>(toml));
+	}
+
+	root_node parse(const std::u8string& toml, no_throw_t)
+	{
+		auto sv = std::u8string_view{ toml };
+		return parse<true>(reinterpret_cast<std::string_view>(sv));
+	}
+
+	root_node parse(const char8_t* toml, no_throw_t)
+	{
+		return parse<true>(std::string_view{ reinterpret_cast<const char*>(toml) });
+	}
+#endif
 }

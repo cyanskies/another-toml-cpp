@@ -30,12 +30,15 @@
 namespace another_toml
 {
 	// Parse a TOML document.
-	root_node parse(std::string_view toml);
-	root_node parse(const std::string& toml);
-	root_node parse(const char* toml);
+	root_node parse(std::string_view toml);		// assumed utf8
+	root_node parse(const std::string& toml);	// assumed utf8
+	root_node parse(const char* toml);			// assumed utf8
 	root_node parse(std::istream&);
+
 	// NOTE: user must handle std exceptions related to file reading
 	// eg. std::filesystem_error and its children.
+	//		MAKE SURE you initialise filename with a u8char_t string on windows,
+	//		otherwise the payload will be interpreted as an ANSI string
 	root_node parse(const std::filesystem::path& filename);
 
 	// Parse a TOML document without throwing another_toml exceptions
@@ -45,6 +48,17 @@ namespace another_toml
 	root_node parse(const char* toml, no_throw_t);
 	root_node parse(std::istream&, no_throw_t);
 	root_node parse(const std::filesystem::path& filename, no_throw_t);
+
+#if (defined(__cpp_char8_t) && __cpp_char8_t >= 201811L) && \
+	(defined (__cpp_lib_char8_t ) && __cpp_lib_char8_t >= 201907L)
+	root_node parse(std::u8string_view toml);
+	root_node parse(const std::u8string& toml);
+	root_node parse(const char8_t* toml);
+
+	root_node parse(std::u8string_view toml, no_throw_t);
+	root_node parse(const std::u8string& toml, no_throw_t);
+	root_node parse(const char8_t* toml, no_throw_t);
+#endif
 }
 
 #endif
